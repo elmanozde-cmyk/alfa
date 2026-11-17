@@ -40,6 +40,10 @@
   };
 
   let walks = store.get(KEY_WALKS, []);
+  // Harita modu: 'normal' (her yer açık, yollar çizgi) | 'kesif' (kara kapalı, gezdikçe açılır, deniz açık)
+  const KEY_MODE = 'izim.mode.v1';
+  let mode = store.get(KEY_MODE, 'normal');
+  const FOG_COLOR = '#b8c2c9', FOG_EDGE = '#94a1ab';
   const saveWalks = () => store.set(KEY_WALKS, walks);
 
   // ---------- Yardımcılar ----------
@@ -170,6 +174,7 @@
       }
       walkMeta.set(w.id, { fresh, laps });
     }
+    if (typeof routesLayer !== 'undefined') onIndexChanged();
   }
 
   // ---------- Yer adı (OpenStreetMap Nominatim, önbellekli, saniyede 1 istek) ----------
@@ -208,6 +213,7 @@
 
   // ---------- Harita ----------
   const map = L.map('map', { zoomControl: false }).setView([39.0, 35.0], 6);
+  let glMap = null, glFogReady = false; // MapLibre haritası ve sis katmanı hazır mı
   // Modern harita: OpenFreeMap (ücretsiz, anahtar istemez). Cihaz desteklemezse klasik OSM'e döner.
   (function addBaseMap() {
     const osm = () => L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
@@ -226,8 +232,10 @@
         }).addTo(map);
         // Harita çizilemezse klasik haritaya geç
         let fell = false;
-        const fallback = () => { if (fell) return; fell = true; map.removeLayer(gl); osm(); };
+        const fallback = () => { if (fell) return; fell = true; glMap = null; glFogReady = false; map.removeLayer(gl); osm(); applyMode(); };
         const m = gl.getMaplibreMap();
+        glMap = m;
+        if (m.isStyleLoaded()) setupGlFog(); else m.once('load', setupGlFog);
         m.on('error', () => { if (!m.isStyleLoaded()) fallback(); });
         setTimeout(() => { if (!m.isStyleLoaded()) fallback(); }, 12000);
       })
@@ -260,8 +268,10 @@
       L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
       const ctx = c.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = 'rgba(20, 28, 36, 0.5)';
-      ctx.fillRect(0, 0, size.x, size.y);
+      const darkFog = mode === 'kesif' && !glFogReady; // MapLibre yoksa eski usul sis
+      const tint = tab === 'explore' || darkFog;        // kaç kez geçildiği renkleri
+      if (darkFog) { ctx.fillStyle = 'rgba(20, 28, 36, 0.5)'; ctx.fillRect(0, 0, size.x, size.y); }
+      if (!tint) { if (tab === 'explore') renderViewPct(); return; }
 
       const z = m.getZoom(), scale = 2 ** (z - CELL_Z), s = 256 * scale;
       const o = m.project(m.containerPointToLatLng([0, 0]), z);
@@ -275,10 +285,12 @@
       for (const [k, v] of liveCells) if (!cells.has(k)) add(v.x, v.y, 1);
 
       const pad = s < 3 ? 1 : 0.5; // küçük ölçekte kareler görünür kalsın
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = '#000';
-      for (const [px, py] of list) ctx.fillRect(px - pad, py - pad, s + pad * 2, s + pad * 2);
-      ctx.globalCompositeOperation = 'source-over';
+      if (darkFog) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = '#000';
+        for (const [px, py] of list) ctx.fillRect(px - pad, py - pad, s + pad * 2, s + pad * 2);
+        ctx.globalCompositeOperation = 'source-over';
+      }
       ctx.globalAlpha = 0.45;
       for (const [px, py, p] of list) { ctx.fillStyle = heatOf(p).c; ctx.fillRect(px - pad, py - pad, s + pad * 2, s + pad * 2); }
       ctx.globalAlpha = 1;
@@ -286,6 +298,71 @@
     },
   });
   const fog = new FogLayer();
+
+  // ---------- Keşif sisi (MapLibre içinde: kara ve göller kapalı, deniz açık) ----------
+  function fogKeys() {
+    const keys = new Set(cells.keys());
+    for (const k of liveCells.keys()) keys.add(k);
+    return keys;
+  }
+  function setupGlFog() {
+    const m = glMap;
+    if (!m || !window.izimFog) return;
+    try {
+      if (!m.getSource('izim-fog')) m.addSource('izim-fog', { type: 'geojson', data: window.izimFog.build(fogKeys()) });
+      if (!m.getLayer('izim-fog')) {
+        m.addLayer({ id: 'izim-fog', type: 'fill', source: 'izim-fog', paint: { 'fill-color': FOG_COLOR, 'fill-opacity': 1 } });
+        m.addLayer({ id: 'izim-fog-edge', type: 'line', source: 'izim-fog', paint: { 'line-color': FOG_EDGE, 'line-width': 1.2 } });
+        // Deniz sisin üstünde kalsın (göller kalmasın)
+        const water = (m.getStyle().layers || []).find((l) => l.id === 'water');
+        if (water) {
+          const ocean = {
+            id: 'izim-ocean', type: 'fill', source: water.source,
+            filter: ['==', ['get', 'class'], 'ocean'],
+            paint: { 'fill-color': (water.paint && water.paint['fill-color']) || '#aad3f5' },
+          };
+          if (water['source-layer']) ocean['source-layer'] = water['source-layer'];
+          m.addLayer(ocean);
+        }
+      }
+      glFogReady = true;
+    } catch (e) { console.warn('Sis katmanı kurulamadı', e); glFogReady = false; }
+    applyMode();
+  }
+  let glFogTimer = null;
+  function updateGlFog(now) {
+    if (!glMap || !glFogReady) return;
+    clearTimeout(glFogTimer);
+    const run = () => { try { glMap.getSource('izim-fog').setData(window.izimFog.build(fogKeys())); } catch {} };
+    if (now) run(); else glFogTimer = setTimeout(run, 1200);
+  }
+
+  // Normal modda tüm yürüyüşler ince çizgi olarak
+  const routesLayer = L.layerGroup();
+  function drawRoutes() {
+    routesLayer.clearLayers();
+    for (const w of walks) L.polyline(w.segs, { color: ROUTE, weight: 4, opacity: 0.55, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(routesLayer);
+  }
+  function onIndexChanged() { drawRoutes(); updateGlFog(true); if (map.hasLayer(fog)) fog.redraw(); }
+
+  function applyMode() {
+    const kesif = mode === 'kesif';
+    if (glMap && glFogReady) {
+      for (const id of ['izim-fog', 'izim-fog-edge', 'izim-ocean']) {
+        try { if (glMap.getLayer(id)) glMap.setLayoutProperty(id, 'visibility', kesif ? 'visible' : 'none'); } catch {}
+      }
+    }
+    const showRoutes = !kesif && (tab === 'walk' || tab === 'explore');
+    if (showRoutes) map.addLayer(routesLayer); else map.removeLayer(routesLayer);
+    if (map.hasLayer(fog)) fog.redraw();
+    renderLegend();
+    document.querySelectorAll('.seg [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+  }
+  function setMode(m) {
+    mode = m; store.set(KEY_MODE, m);
+    applyMode();
+    note(m === 'kesif' ? 'Keşif modu: gezdiğin yerler açılır.' : 'Normal mod: harita tamamen açık.');
+  }
 
   const liveLayer = L.layerGroup().addTo(map);
   const dayLayer = L.layerGroup();
@@ -316,7 +393,7 @@
       const [x, y] = cellXY(la, ln), k = x + ',' + y;
       if (liveCells.has(k)) return;
       liveCells.set(k, { x, y });
-      if (!cells.has(k)) liveFresh++;
+      if (!cells.has(k)) { liveFresh++; updateGlFog(false); }
     });
   }
   function liveRebuild() {
@@ -521,7 +598,7 @@
   function renderLegend() {
     $('legend').innerHTML = [...HEAT].reverse()
       .map((h) => `<span><i style="background:${h.c}"></i>${h.label}</span>`).join('') +
-      '<span><i style="background:rgba(20,28,36,.5)"></i>gidilmedi</span>';
+      (mode === 'kesif' ? `<span><i style="background:${glFogReady ? FOG_COLOR : 'rgba(20,28,36,.5)'}"></i>gidilmedi</span>` : '');
   }
 
   function renderViewPct() {
@@ -616,30 +693,25 @@
     $('dStreak').textContent = streak(new Set(days.map((d) => d[0])));
   }
 
-  function renderChart() {
-    const box = $('chart'), tip = $('tip');
+  // Basit çubuk grafik (tek seri, dokununca değer balonu)
+  function drawBars(box, data, opts) {
+    const tip = box.querySelector('.tip');
     box.querySelector('svg')?.remove();
-    const perDay = new Map();
-    for (const w of walks) { const k = dayKey(w.start); perDay.set(k, (perDay.get(k) || 0) + w.dist); }
-    const data = [];
-    for (let i = 13; i >= 0; i--) {
-      const t = Date.now() - i * 864e5;
-      data.push({ k: dayKey(t), t, m: perDay.get(dayKey(t)) || 0 });
-    }
-    const W = Math.max(260, box.clientWidth || 300), H = 110, top = 16, base = 88, gap = 4;
-    const bw = (W - gap * 13) / 14;
-    const max = Math.max(1000, ...data.map((d) => d.m));
+    const n = data.length;
+    const W = Math.max(260, box.clientWidth || 300), H = 110, top = 16, base = 88, gap = n > 10 ? 4 : 8;
+    const bw = (W - gap * (n - 1)) / n;
+    const vals = data.map((d) => d.v || 0);
+    const max = Math.max(opts.minMax || 0, ...vals) || 1;
     const css = getComputedStyle(document.documentElement);
     const accent = css.getPropertyValue('--accent').trim(), muted = css.getPropertyValue('--muted').trim(), line = css.getPropertyValue('--line').trim();
-    const letters = ['P', 'P', 'S', 'Ç', 'P', 'C', 'C']; // Pazar..Cumartesi
-    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Son 14 günde yürünen kilometre">`;
-    svg += `<text x="0" y="10" font-size="11" fill="${muted}">${fmtKm(max, 1)} km</text>`;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.aria)}">`;
+    svg += `<text x="0" y="10" font-size="11" fill="${muted}">${esc(opts.fmtMax(max))}</text>`;
     svg += `<line x1="0" x2="${W}" y1="${top}" y2="${top}" stroke="${line}" stroke-dasharray="3 3"/>`;
     data.forEach((d, i) => {
-      const x = i * (bw + gap), h = d.m ? Math.max(3, (d.m / max) * (base - top)) : 0, y = base - h, r = Math.min(4, bw / 2, h);
+      const v = d.v || 0;
+      const x = i * (bw + gap), h = v ? Math.max(3, (v / max) * (base - top)) : 0, y = base - h, r = Math.min(4, bw / 2, h);
       if (h) svg += `<path d="M${x},${base} V${y + r} Q${x},${y} ${x + r},${y} H${x + bw - r} Q${x + bw},${y} ${x + bw},${y + r} V${base} Z" fill="${accent}"/>`;
-      const today = i === 13;
-      svg += `<text x="${x + bw / 2}" y="${base + 16}" font-size="11" text-anchor="middle" fill="${today ? accent : muted}" font-weight="${today ? 700 : 400}">${letters[new Date(d.t).getDay()]}</text>`;
+      svg += `<text x="${x + bw / 2}" y="${base + 16}" font-size="11" text-anchor="middle" fill="${d.hl ? accent : muted}" font-weight="${d.hl ? 700 : 400}">${esc(d.label)}</text>`;
       svg += `<rect data-i="${i}" x="${x - gap / 2}" y="0" width="${bw + gap}" height="${H}" fill="transparent"/>`;
     });
     svg += `<line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="${muted}" stroke-opacity=".5"/></svg>`;
@@ -648,9 +720,9 @@
     const show = (e) => {
       const i = e.target.dataset && e.target.dataset.i;
       if (i === undefined) { tip.hidden = true; return; }
-      const d = data[+i], x = (+i * (bw + gap) + bw / 2) / W * el.clientWidth;
-      tip.textContent = `${new Date(d.t).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', weekday: 'short' })}: ${d.m ? fmtKm(d.m) + ' km' : 'yürüyüş yok'}`;
-      tip.style.left = Math.min(Math.max(x, 60), el.clientWidth - 60) + 'px';
+      const x = (+i * (bw + gap) + bw / 2) / W * el.clientWidth;
+      tip.textContent = data[+i].tip;
+      tip.style.left = Math.min(Math.max(x, 70), el.clientWidth - 70) + 'px';
       tip.hidden = false;
     };
     el.addEventListener('pointermove', show);
@@ -658,10 +730,96 @@
     el.addEventListener('pointerleave', () => (tip.hidden = true));
   }
 
+  function renderChart() {
+    const perDay = new Map();
+    for (const w of walks) { const k = dayKey(w.start); perDay.set(k, (perDay.get(k) || 0) + w.dist); }
+    const letters = ['P', 'P', 'S', 'Ç', 'P', 'C', 'C']; // Pazar..Cumartesi
+    const data = [];
+    for (let i = 13; i >= 0; i--) {
+      const t = Date.now() - i * 864e5, m = perDay.get(dayKey(t)) || 0;
+      data.push({
+        v: m, label: letters[new Date(t).getDay()], hl: i === 0,
+        tip: `${new Date(t).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', weekday: 'short' })}: ${m ? fmtKm(m) + ' km' : 'yürüyüş yok'}`,
+      });
+    }
+    drawBars($('chart'), data, { minMax: 1000, fmtMax: (v) => fmtKm(v, 1) + ' km', aria: 'Son 14 günde yürünen kilometre' });
+  }
+
+  // ---------- Nabız ve form ----------
+  // Kalp verimliliği = bir kalp atışında kaç metre ilerlendiği. Aynı hızda nabız düşerse artar: form gelişiyor demektir.
+  const RUN_SPORTS = new Set(['Koşu', 'Arazi koşusu']);
+  let formKind = 'yuruyus';
+  const kindOf = (w) => (w.source === 'polar' && RUN_SPORTS.has(w.sport) ? 'kosu' : 'yuruyus');
+  const hrWalks = (kind) => walks.filter((w) => w.hr && w.hr.avg > 40 && w.dur >= 5 * 60000 && w.dist >= 300 && kindOf(w) === kind);
+  function hrAgg(ws) {
+    if (!ws.length) return null;
+    const dur = ws.reduce((s, w) => s + w.dur, 0), dist = ws.reduce((s, w) => s + w.dist, 0);
+    const hr = ws.reduce((s, w) => s + w.hr.avg * w.dur, 0) / dur; // süreye göre ağırlıklı
+    return { n: ws.length, hr, kmh: dist / 1000 / (dur / 3600000), eff: (dist / (dur / 1000)) / (hr / 60) };
+  }
+  function renderForm() {
+    const box = $('form');
+    const has = { yuruyus: hrWalks('yuruyus').length > 0, kosu: hrWalks('kosu').length > 0 };
+    if (!has.yuruyus && !has.kosu) {
+      box.innerHTML = '<div class="empty">Nabız bandıyla ya da Polar saatinle yürüdükçe burada formunun nasıl değiştiğini göreceksin.</div>';
+      return;
+    }
+    if (!has[formKind]) formKind = has.yuruyus ? 'yuruyus' : 'kosu';
+    const list = hrWalks(formKind), D = 864e5, now = Date.now();
+    const a = hrAgg(list.filter((w) => w.start >= now - 30 * D));
+    const b = hrAgg(list.filter((w) => w.start < now - 30 * D && w.start >= now - 60 * D));
+
+    const delta = (cur, prev, fmt) => (cur && prev ? `<small class="delta">${fmt(cur, prev)}</small>` : '<small class="delta">geçen ay: –</small>');
+    const hrD = (c, p) => { const d = Math.round(c.hr - p.hr); return d === 0 ? 'geçen ayla aynı' : `${d < 0 ? '↓' : '↑'} ${Math.abs(d)} bpm`; };
+    const effD = (c, p) => { const d = Math.round((c.eff / p.eff - 1) * 100); return d === 0 ? 'geçen ayla aynı' : `${d > 0 ? '↑' : '↓'} %${Math.abs(d)}`; };
+    const spdD = (c, p) => { const d = c.kmh - p.kmh; return Math.abs(d) < 0.05 ? 'geçen ayla aynı' : `${d > 0 ? '↑' : '↓'} ${Math.abs(d).toFixed(1).replace('.', ',')}`; };
+
+    let verdict;
+    if (!a) verdict = 'Son 30 günde nabızlı ' + (formKind === 'kosu' ? 'koşu' : 'yürüyüş') + ' yok.';
+    else if (!b || a.n < 2 || b.n < 2) verdict = 'Karşılaştırma için bu ay ve geçen ay en az 2’şer nabızlı kayıt gerekiyor. Şimdilik veri toplanıyor.';
+    else {
+      const d = a.eff / b.eff - 1;
+      verdict = d > 0.03 ? '👍 Geçen aya göre daha rahatsın: aynı yolu daha düşük nabızla gidiyorsun. Formun gelişiyor.'
+        : d < -0.03 ? 'Son 30 günde kalbin biraz daha çok çalışıyor. Yorgunluk, sıcak hava, uyku ya da daha hızlı tempo etkili olabilir.'
+          : 'Formun geçen ayla aynı seviyede.';
+    }
+
+    // Son 8 hafta (pazartesi başlangıçlı)
+    const today = new Date(); const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - ((today.getDay() + 6) % 7)).getTime();
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) {
+      const s = monday - i * 7 * D, e = s + 7 * D;
+      const g = hrAgg(list.filter((w) => w.start >= s && w.start < e));
+      const label = new Date(s).toLocaleDateString('tr-TR', { day: 'numeric', month: 'numeric' });
+      weeks.push({
+        v: g ? g.eff : 0, label: i === 0 ? 'bu' : label, hl: i === 0,
+        tip: g ? `${new Date(s).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} haftası: ${g.eff.toFixed(2).replace('.', ',')} m/atım · ort. ${Math.round(g.hr)} bpm · ${g.n} kayıt`
+          : `${new Date(s).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} haftası: nabızlı kayıt yok`,
+      });
+    }
+
+    box.innerHTML = `
+      ${has.yuruyus && has.kosu ? `<div class="seg" style="margin-bottom:10px">
+        <button data-kind="yuruyus" class="${formKind === 'yuruyus' ? 'on' : ''}">Yürüyüş</button>
+        <button data-kind="kosu" class="${formKind === 'kosu' ? 'on' : ''}">Koşu</button></div>` : ''}
+      <div class="tiles">
+        <div class="tile"><b>${a ? Math.round(a.hr) : '–'}</b><span>ort. nabız</span>${delta(a, b, hrD)}</div>
+        <div class="tile"><b>${a ? a.eff.toFixed(2).replace('.', ',') : '–'}</b><span>m / atım</span>${delta(a, b, effD)}</div>
+        <div class="tile"><b>${a ? a.kmh.toFixed(1).replace('.', ',') : '–'}</b><span>ort. km/sa</span>${delta(a, b, spdD)}</div>
+      </div>
+      <p class="verdict">${verdict}</p>
+      <div class="muted" style="margin:10px 0 2px">Haftalık kalp verimliliği · metre / atım (yüksek = daha rahat)</div>
+      <div class="chart" id="effChart"><div class="tip" hidden></div></div>
+      <div class="muted" style="font-size:11.5px;margin-top:4px">Son 30 gün, önceki 30 günle karşılaştırılır. Tıbbi değerlendirme değildir.</div>`;
+    box.querySelectorAll('[data-kind]').forEach((btn) => (btn.onclick = () => { formKind = btn.dataset.kind; renderForm(); }));
+    drawBars($('effChart'), weeks, { fmtMax: (v) => v.toFixed(2).replace('.', ',') + ' m/atım', aria: 'Haftalık kalp verimliliği' });
+  }
+
   function renderDaily() {
     const days = groupDays();
     renderTiles(days);
     renderChart();
+    renderForm();
     const box = $('days');
     box.innerHTML = '';
     if (!days.length) {
@@ -1063,6 +1221,7 @@
 
     if (t === 'daily') { map.removeLayer(fog); map.addLayer(dayLayer); fillPlaces(); renderDaily(); drawDay(); }
     else { map.removeLayer(dayLayer); map.addLayer(fog); }
+    applyMode();
 
     if (t === 'explore') {
       renderExplore();
@@ -1080,6 +1239,7 @@
   $('bPause').onclick = togglePause;
   $('bStop').onclick = stop;
   $('bHr').onclick = hrConnect;
+  document.querySelectorAll('.seg [data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   $('bExport').onclick = exportData;
   $('bImport').onclick = () => $('fileIn').click();
@@ -1111,6 +1271,7 @@
     liveRebuild(); drawLive();
   }
   map.addLayer(fog);
+  applyMode();
   startWatch();
   renderButtons(); renderStats();
   fillPlaces();
