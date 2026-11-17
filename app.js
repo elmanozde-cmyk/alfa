@@ -215,18 +215,23 @@
       try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
     })();
     if (!webgl || !L.maplibreGL || !window.maplibregl) return osm();
-    try {
-      const gl = L.maplibreGL({
-        style: 'https://tiles.openfreemap.org/styles/liberty',
-        attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; OpenStreetMap',
-      }).addTo(map);
-      // Harita stili yüklenemezse (servis kapalı vb.) klasik haritaya geç
-      let fell = false;
-      const fallback = () => { if (fell) return; fell = true; map.removeLayer(gl); osm(); };
-      const m = gl.getMaplibreMap();
-      m.on('error', () => { if (!m.isStyleLoaded()) fallback(); });
-      setTimeout(() => { if (!m.isStyleLoaded()) fallback(); }, 12000);
-    } catch { osm(); }
+    // Stili indirip Google Haritalar tarzı sade renklere çevir (mapstyle.js)
+    fetch('https://tiles.openfreemap.org/styles/liberty')
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((style) => {
+        if (window.izimRestyle) style = window.izimRestyle(style);
+        const gl = L.maplibreGL({
+          style,
+          attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; OpenStreetMap',
+        }).addTo(map);
+        // Harita çizilemezse klasik haritaya geç
+        let fell = false;
+        const fallback = () => { if (fell) return; fell = true; map.removeLayer(gl); osm(); };
+        const m = gl.getMaplibreMap();
+        m.on('error', () => { if (!m.isStyleLoaded()) fallback(); });
+        setTimeout(() => { if (!m.isStyleLoaded()) fallback(); }, 12000);
+      })
+      .catch(() => osm());
   })();
   map.createPane('fog').style.zIndex = 350;
   map.getPane('fog').classList.add('fog-pane');
