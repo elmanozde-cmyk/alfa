@@ -2,5 +2,8 @@
   "appId": "com.izim.yuruyus",
   "appName": "İzim",
   "webDir": "www",
-  "android": { "allowMixedContent": false }
+  "android": {
+    "allowMixedContent": false,
+    "useLegacyBridge": true
+  }
 }

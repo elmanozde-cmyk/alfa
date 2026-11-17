@@ -2,30 +2,48 @@
 // esbuild ile www/native.js olarak paketlenir; web sürümünde yüklenmez.
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { BleClient } from '@capacitor-community/bluetooth-le';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 const HR_SERVICE = '0000180d-0000-1000-8000-00805f9b34fb';
 const HR_MEASUREMENT = '00002a37-0000-1000-8000-00805f9b34fb';
 let bleReady = false;
 
+// Sorun olursa Ayarlar → Tanılama'da gösterilir
+const diag = { starts: 0, locations: 0, lastLocation: null, lastError: null, notifications: 'bilinmiyor' };
+const errText = (e) => (e && (e.code ? `${e.code}: ` : '') + (e.message || String(e))) || 'bilinmeyen hata';
+
 window.izimNative = {
   isNative: Capacitor.isNativePlatform(),
+  diag,
 
   // Ekran kapalıyken de konum: bildirim çubuğunda kalıcı bildirimle çalışan ön plan servisi
   async startTracking(onLocation, onError) {
-    return BackgroundGeolocation.addWatcher(
-      {
-        backgroundTitle: 'İzim kaydediyor',
-        backgroundMessage: 'Yürüyüşün kaydediliyor. Bitirmek için uygulamayı aç.',
-        requestPermissions: true,
-        stale: false,
-        distanceFilter: 0,
-      },
-      (loc, err) => {
-        if (err) { if (onError) onError(err); return; }
-        if (loc) onLocation(loc);
-      },
-    );
+    // Android 13+: kalıcı bildirim için izin (servisin güvenilir çalışması için)
+    try {
+      let p = await LocalNotifications.checkPermissions();
+      if (p.display !== 'granted') p = await LocalNotifications.requestPermissions();
+      diag.notifications = p.display;
+    } catch (e) { diag.notifications = 'sorulamadı'; }
+    diag.starts++;
+    try {
+      return await BackgroundGeolocation.addWatcher(
+        {
+          backgroundTitle: 'İzim kaydediyor',
+          backgroundMessage: 'Yürüyüşün kaydediliyor. Bitirmek için uygulamayı aç.',
+          requestPermissions: true,
+          stale: false,
+          distanceFilter: 0,
+        },
+        (loc, err) => {
+          if (err) { diag.lastError = errText(err); if (onError) onError(err); return; }
+          if (loc) { diag.locations++; diag.lastLocation = Date.now(); onLocation(loc); }
+        },
+      );
+    } catch (e) {
+      diag.lastError = errText(e);
+      throw e;
+    }
   },
   stopTracking(id) {
     return BackgroundGeolocation.removeWatcher({ id });

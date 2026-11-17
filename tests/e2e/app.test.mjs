@@ -157,3 +157,40 @@ test('ilk açılış: karşılama kartı, ana ekrana ekle, Android bağlantısı
   assert.deepEqual(p.errors, []);
   await ctx.close();
 });
+
+test('Android: arka plan servisi konum göndermese de kayıt yapılır (yedek yol)', async () => {
+  // Telefonda yaşanan hata: servis açılıyor ama hiç konum gelmiyor
+  const ctx = await newContext(browser, {
+    init: () => {
+      window.izimNative = {
+        isNative: true, diag: { locations: 0, lastError: null, notifications: 'granted' },
+        async startTracking() { return 'w1'; }, async stopTracking() {},
+        openSettings() {}, async hrConnect() { return { id: 'x', name: 'x' }; }, async hrAttach() {}, async hrDisconnect() {},
+      };
+    },
+  });
+  const p = await openApp(ctx, server.url);
+  await p.click('#bStart');
+  await walk(ctx, p, 10);
+  assert.match(await p.textContent('#liveExtra'), /Arka plan servisi başlatılıyor/);
+  assert.doesNotMatch(await p.textContent('#liveExtra'), /Otomatik duraklatıldı/);
+  await p.click('#bStop'); await p.waitForTimeout(300);
+  const w = await p.evaluate(() => window.izimDebug.walks()[0]);
+  assert.ok(w && w.dist > 60, `yürüyüş kaydedildi (${w && w.dist} m)`);
+  await p.click('.nav [data-tab=settings]');
+  assert.match(await p.textContent('#diag'), /Android uygulaması/);
+  assert.deepEqual(p.errors, []);
+  await ctx.close();
+});
+
+test('GPS sessizken otomatik duraklatma devreye girmez', async () => {
+  const ctx = await newContext(browser);
+  const p = await openApp(ctx, server.url);
+  await p.click('#bStart');
+  await p.evaluate(() => { navigator.geolocation.clearWatch = () => {}; }); // etkisiz; konum gelmeyecek
+  await ctx.setGeolocation({ latitude: 40.99, longitude: 29.025, accuracy: 500 }); // zayıf sinyal: kayda alınmaz
+  await p.waitForTimeout(23000);
+  assert.doesNotMatch(await p.textContent('#liveExtra'), /Otomatik duraklatıldı/);
+  assert.equal(await p.textContent('#bPause'), 'Duraklat');
+  await ctx.close();
+});

@@ -1,8 +1,8 @@
 // Uygulama dosyalarını önbelleğe alır; internet yokken de açılır.
 // Kendi dosyalarımız her açılışta tazelenir (eski/yeni dosya karışmasın diye).
-const CACHE = 'izim-v17';
+const CACHE = 'izim-v18';
 const ASSETS = [
-  './', './index.html', './app.js?v=17', './mapstyle.js?v=17', './fog.js?v=17', './importer.js?v=17', './manifest.webmanifest', './icon.svg',
+  './', './index.html', './app.js?v=18', './mapstyle.js?v=18', './fog.js?v=18', './importer.js?v=18', './manifest.webmanifest', './icon.svg',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
   'https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.css',

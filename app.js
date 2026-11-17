@@ -558,6 +558,10 @@
       else parts.push(`📡 GPS ${cur ? 'iyi' : 'hazır'} (±${Math.round(lastAcc)} m)`);
     }
     if (cur && cur.autoPaused) parts.push('⏸ <b>Otomatik duraklatıldı</b> · yürüyünce devam eder');
+    if (NATIVE && cur && (cur.resumedAt || cur.autoPaused)) {
+      const d = window.izimNative.diag || { locations: 0 };
+      parts.push(d.locations ? `🛰 Arka plan servisi açık (${d.locations} konum)` : d.lastError ? '⚠️ Arka plan servisi çalışmıyor (Ayarlar → Tanılama)' : '🛰 Arka plan servisi başlatılıyor…');
+    }
     if (cur && cur.type === 'arac') parts.push('🚗 Araç kaydı');
     else if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
     if (carHint && cur && cur.type !== 'arac') parts.push('<br>🚗 <b>Araçta gibisin.</b> Bitir, sonra Araç seçip yeniden başlat.');
@@ -670,7 +674,7 @@
       if (tab === 'walk') map.setView(lastFix, 17);
     } else if (follow && tab === 'walk') map.panTo(lastFix, { animate: true });
 
-    lastAcc = accuracy;
+    lastAcc = accuracy; lastFixT = Date.now();
     if (cur && cur.autoPaused) {
       // Otomatik duraklatmadan çık: son noktadan 12 m uzaklaşınca
       const s = cur.segs[cur.segs.length - 1], ref = s[s.length - 1];
@@ -743,13 +747,12 @@
             if (confirm('İzim konum izni olmadan kayıt yapamaz. Ayarlar açılsın mı?')) window.izimNative.openSettings();
           } else note('Konum alınamadı.', true);
         });
-        // Tarayıcının konum takibini durdur (aynı konum iki kez gelmesin)
-        if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-      } catch (e) { nativeWatch = null; note('Arka planda konum başlatılamadı.', true); }
+        // Uygulama açıkken tarayıcının konum takibi de yedek olarak çalışmaya devam eder;
+        // aynı konum iki kez gelirse en kısa adım filtresi onu zaten eler.
+      } catch (e) { nativeWatch = null; note('Arka planda konum başlatılamadı. Ekran açıkken kayıt yine yapılır.', true); }
     } else if (!on && nativeWatch !== null && nativeWatch !== 'starting') {
       const id = nativeWatch; nativeWatch = null;
       try { await window.izimNative.stopTracking(id); } catch {}
-      startWatch();
     }
   }
 
@@ -760,9 +763,11 @@
   }
   async function lockScreen() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
   function releaseScreen() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
-  let lastMoveT = 0;
+  let lastMoveT = 0, lastFixT = 0;
   function autoPauseCheck() {
     if (!prefs.autoPause || !cur || !cur.resumedAt || cur.autoPaused) return;
+    // GPS sessizse duruyor sayma: sadece konum geliyorken ve kayıt başlamışken
+    if (Date.now() - lastFixT > 8000 || !cur.segs.some((s) => s.length)) return;
     if (Date.now() - lastMoveT < 20000) return;
     // 20 sn hareket yok: son hareket anında durdur
     cur.activeMs += Math.max(0, lastMoveT - cur.resumedAt);
@@ -2040,7 +2045,7 @@
     document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     ['walk', 'explore', 'daily', 'settings'].forEach((n) => ($('p-' + n).hidden = n !== t));
     $('p-detail').hidden = true; detailId = null;
-    if (t === 'settings') { renderAccount(); renderPolar(); }
+    if (t === 'settings') { renderAccount(); renderPolar(); renderDiag(); }
     map.closePopup();
 
     if (t === 'daily') { map.removeLayer(fog); map.addLayer(dayLayer); fillPlaces(); if (dailyView === 'list') renderList(); else renderDaily(); drawDay(); }
@@ -2139,6 +2144,27 @@
     if (cur.autoPaused) { startTick(); lockScreen(); }
     if (cur.resumedAt || cur.autoPaused) nativeTrack(true);
     liveRebuild(); drawLive();
+  }
+
+  // ---------- Tanılama (sorun bildirirken ekran görüntüsü için) ----------
+  function renderDiag() {
+    const box = $('diag');
+    if (!box) return;
+    const ago = (t) => (t ? `${Math.round((Date.now() - t) / 1000)} sn önce` : 'hiç');
+    const rows = [
+      ['Sürüm', NATIVE ? 'Android uygulaması' : 'Web'],
+      ['Son konum', `${ago(lastFixT)}${lastAcc !== null ? ` (±${Math.round(lastAcc)} m)` : ''}`],
+      ['Kayıt', cur ? (cur.resumedAt ? 'sürüyor' : cur.autoPaused ? 'otomatik duraklatıldı' : 'duraklatıldı') + `, ${cur.segs.reduce((n, s) => n + s.length, 0)} nokta` : 'yok'],
+    ];
+    if (NATIVE) {
+      const d = window.izimNative.diag || { locations: 0 };
+      rows.push(['Arka plan servisi', nativeWatch && nativeWatch !== 'starting' ? 'açık' : nativeWatch === 'starting' ? 'başlatılıyor' : 'kapalı']);
+      rows.push(['Servisten gelen konum', `${d.locations} (son: ${ago(d.lastLocation)})`]);
+      rows.push(['Bildirim izni', d.notifications]);
+      rows.push(['Son hata', d.lastError || 'yok']);
+    }
+    rows.push(['Kayıtlı yürüyüş', `${walks.length}`]);
+    box.innerHTML = rows.map(([k, v]) => `<div class="drow"><span>${esc(k)}</span><b>${esc(String(v))}</b></div>`).join('');
   }
 
   // ---------- İlk açılış ve kurulum ----------

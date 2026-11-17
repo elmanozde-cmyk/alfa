@@ -193,6 +193,11 @@
   .welcome ul { margin:6px 0 10px; padding-left:0; list-style:none; font-size:13.5px; line-height:1.5; }
   .welcome li { margin:3px 0; }
   a.item-row { color:inherit; text-decoration:none; }
+  .diag { padding:6px 14px; font-size:13px; }
+  .drow { display:flex; justify-content:space-between; gap:10px; padding:6px 0; }
+  .drow + .drow { border-top:1px solid var(--line); }
+  .drow span { color:var(--muted); }
+  .drow b { text-align:right; font-weight:600; word-break:break-word; }
   /* Ayarlar */
   .card { background:var(--soft); border-radius:18px; padding:14px; }
   .card.list { padding:4px 0; }
@@ -357,6 +362,8 @@
   </div>
   <input type="file" id="fileIn" accept=".json,application/json" hidden>
   <input type="file" id="fileGpx" accept=".gpx,.tcx,application/gpx+xml,application/vnd.garmin.tcx+xml" multiple hidden>
+  <div class="sec-title">Tanılama</div>
+  <div class="card diag" id="diag"></div>
   <div class="sec-title">Hakkında</div>
   <div class="card about">
     İzim yürüdüğün yolları kaydeder ve keşif haritanı çıkarır. Kayıtlar önce bu telefona kaydedilir; giriş yaptıysan buluta da yedeklenir.<br>
@@ -375,9 +382,9 @@
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.89.0/dist/umd/supabase.js"></script>
-<script src="mapstyle.js?v=17"></script>
-<script src="fog.js?v=17"></script>
-<script src="importer.js?v=17"></script>
-<script src="app.js?v=17"></script>
+<script src="mapstyle.js?v=18"></script>
+<script src="fog.js?v=18"></script>
+<script src="importer.js?v=18"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>
