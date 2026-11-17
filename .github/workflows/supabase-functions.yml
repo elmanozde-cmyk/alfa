@@ -33,5 +33,5 @@ jobs:
       - name: Fonksiyonları yayınla
         if: steps.check.outputs.skip != 'true'
         run: |
-          supabase functions deploy polar --project-ref "$PROJECT_REF" --no-verify-jwt
-          supabase functions deploy polar-callback --project-ref "$PROJECT_REF" --no-verify-jwt
+          supabase functions deploy polar --project-ref "$PROJECT_REF" --no-verify-jwt --yes
+          supabase functions deploy polar-callback --project-ref "$PROJECT_REF" --no-verify-jwt --yes
