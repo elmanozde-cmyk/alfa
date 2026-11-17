@@ -1,13 +1,14 @@
-// Uygulama dosyalarını önbelleğe alır; internet zayıfken de açılır.
-const CACHE = 'izim-v2';
+// Uygulama dosyalarını önbelleğe alır; internet yokken de açılır.
+// Kendi dosyalarımız her açılışta tazelenir (eski/yeni dosya karışmasın diye).
+const CACHE = 'izim-v3';
 const ASSETS = [
-  './', './index.html', './app.js', './manifest.webmanifest', './icon.svg',
+  './', './index.html', './app.js?v=3', './manifest.webmanifest', './icon.svg',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).catch(() => {}).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -20,13 +21,16 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.hostname.endsWith('tile.openstreetmap.org')) return;
-  // Önce ağ, olmazsa önbellek
+  if (e.request.method !== 'GET') return;
+  const own = url.origin === location.origin;
+  const lib = url.hostname === 'cdnjs.cloudflare.com';
+  if (!own && !lib) return; // harita karoları ve yer adları doğrudan ağdan
+  // Önce ağ (tarayıcı önbelleğini atlayarak), olmazsa kayıtlı kopya
+  const req = own ? new Request(e.request, { cache: 'no-cache' }) : e.request;
   e.respondWith(
-    fetch(e.request)
+    fetch(req)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
         return res;
       })
       .catch(() => caches.match(e.request))

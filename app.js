@@ -208,7 +208,11 @@
 
   // ---------- Harita ----------
   const map = L.map('map', { zoomControl: false }).setView([39.0, 35.0], 6);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+  // Modern, sade harita (CARTO Voyager); retina ekranlarda keskin
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20, subdomains: 'abcd', detectRetina: false,
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+  }).addTo(map);
   map.createPane('fog').style.zIndex = 350;
   map.getPane('fog').classList.add('fog-pane');
 
@@ -236,7 +240,7 @@
       L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
       const ctx = c.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = 'rgba(14, 22, 20, 0.58)';
+      ctx.fillStyle = 'rgba(20, 28, 36, 0.5)';
       ctx.fillRect(0, 0, size.x, size.y);
 
       const z = m.getZoom(), scale = 2 ** (z - CELL_Z), s = 256 * scale;
@@ -424,7 +428,7 @@
   function renderLegend() {
     $('legend').innerHTML = [...HEAT].reverse()
       .map((h) => `<span><i style="background:${h.c}"></i>${h.label}</span>`).join('') +
-      '<span><i style="background:rgba(14,22,20,.58)"></i>gidilmedi</span>';
+      '<span><i style="background:rgba(20,28,36,.5)"></i>gidilmedi</span>';
   }
 
   function renderViewPct() {
