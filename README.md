@@ -40,3 +40,14 @@ Yerelde denemek: `python3 -m http.server` → `http://localhost:8000`.
 ## Bulut (Supabase)
 - Tablo ve erişim kuralları: `supabase/schema.sql` (Supabase → SQL Editor'de bir kez çalıştırılır).
 - Uygulamada sadece **publishable** anahtar bulunur. `sb_secret_...` anahtarı asla koda konmaz.
+
+## Testler
+- `npm test` — birim testleri (`tests/unit`) ve gerçek tarayıcıda uçtan uca testler (`tests/e2e`).
+- Polar fonksiyonu: `deno run --allow-read tests/unit/polar.test.ts`.
+- GitHub'da her gönderimde otomatik çalışır (`.github/workflows/tests.yml`).
+
+## Android uygulaması
+- Aynı web kodu Capacitor ile Android uygulamasına paketlenir (`android/`, `native/native.js`).
+- Ekran kapalıyken kayıt: arka plan konum servisi (bildirim çubuğunda "İzim kaydediyor").
+- Nabız bandı Android'de yerel Bluetooth ile bağlanır.
+- APK her gönderimde GitHub'da derlenir: https://github.com/elmanozde-cmyk/alfa/releases/tag/android-latest
