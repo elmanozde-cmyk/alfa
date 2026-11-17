@@ -295,7 +295,8 @@
 
   function panelPad() {
     const p = document.querySelector('.panel:not([hidden])');
-    return { paddingTopLeft: [30, 80], paddingBottomRight: [30, (p ? p.offsetHeight : 200) + 30] };
+    const nav = document.querySelector('.nav');
+    return { paddingTopLeft: [30, 80], paddingBottomRight: [30, (p ? p.offsetHeight : 200) + (nav ? nav.offsetHeight : 0) + 30] };
   }
 
   // ---------- Kayıt ----------
@@ -331,10 +332,10 @@
     $('sTime').textContent = fmtTime(t);
     $('sPace').textContent = fmtPace(t, d);
     const parts = [];
-    if (recording()) {
+    if (!cur || recording()) {
       if (lastAcc === null) parts.push('📡 Konum bekleniyor…');
       else if (lastAcc > MAX_ACCURACY) parts.push(`📡 <b>GPS zayıf</b> (±${Math.round(lastAcc)} m) · açık alana çık`);
-      else parts.push(`📡 GPS iyi (±${Math.round(lastAcc)} m)`);
+      else parts.push(`📡 GPS ${cur ? 'iyi' : 'hazır'} (±${Math.round(lastAcc)} m)`);
     }
     if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
     if (cur && liveLaps) parts.push(`<b>${liveLaps}</b> tur`);
@@ -361,8 +362,9 @@
       if (tab === 'walk') map.setView(lastFix, 17);
     } else if (follow && tab === 'walk') map.panTo(lastFix, { animate: true });
 
-    if (!recording()) return;
-    lastAcc = accuracy; bestAcc = Math.min(bestAcc, accuracy);
+    lastAcc = accuracy;
+    if (!recording()) { renderStats(); return; }
+    bestAcc = Math.min(bestAcc, accuracy);
     if (accuracy > MAX_ACCURACY) { renderStats(); return; }
 
     const seg = cur.segs[cur.segs.length - 1];
@@ -697,7 +699,22 @@
   const SB_KEY = 'sb_publishable_PipYjTO8bk6678h49Aw5Sg_DGJaEoS1'; // herkese açık anahtar (gizli değil)
   const KEY_TOMB = 'izim.deleted.v1';
   const KEY_PULL = 'izim.pulled.v1.';
-  let sb = null, user = null, syncing = false, syncAgain = false, syncMsg = '', syncTimer = null, mailSent = '';
+  const KEY_PENDING = 'izim.pendingMail.v1';
+  let sb = null, user = null, syncing = false, syncAgain = false, syncMsg = '', syncTimer = null, authNotice = '';
+  let pending = store.get(KEY_PENDING, null); // { email, t } — bağlantı gönderildi, henüz tıklanmadı
+  if (pending && Date.now() - pending.t > 3600e3) { pending = null; store.del(KEY_PENDING); }
+  // E-postadaki bağlantıdan mı gelindi?
+  const urlInfo = (() => {
+    const h = new URLSearchParams(location.hash.slice(1)), q = new URLSearchParams(location.search);
+    return {
+      error: h.get('error_description') || q.get('error_description'),
+      login: h.has('access_token') || q.has('code'),
+    };
+  })();
+  if (urlInfo.error) {
+    authNotice = 'Bu giriş bağlantısı geçersiz ya da süresi dolmuş. Aşağıdan yeni bağlantı iste.';
+    try { history.replaceState(null, '', location.pathname); } catch {}
+  }
   try {
     if (window.supabase) sb = window.supabase.createClient(SB_URL, SB_KEY, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -780,46 +797,63 @@
     if (syncAgain) { syncAgain = false; sync(); }
   }
 
+  async function sendLink(email, btn) {
+    if (btn) { btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Gönderiliyor…'; }
+    const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.t; }
+    if (error) {
+      alert(/rate|limit|seconds/i.test(error.message) ? 'Çok sık denendi. Birkaç dakika bekleyip tekrar dene.' : 'Gönderilemedi: ' + error.message);
+      return;
+    }
+    authNotice = '';
+    pending = { email, t: Date.now() };
+    store.set(KEY_PENDING, pending);
+    renderAccount();
+  }
+
   function renderAccount() {
     const box = $('account');
     if (!box) return;
-    if (!sb) { box.hidden = true; return; }
-    box.hidden = false;
+    if (!sb) { box.innerHTML = '<div class="muted">Bulut bağlantısı yüklenemedi. İnternet bağlantını kontrol et.</div>'; return; }
+    const notice = authNotice ? `<p class="muted" style="margin:0 0 10px;color:var(--danger)">${esc(authNotice)}</p>` : '';
     if (user) {
-      box.innerHTML = `<div class="acc-line"><span>☁️ <b>${esc(user.email || 'Hesap')}</b></span>
-        <button class="link" id="accOut">Çıkış</button></div>
-        <div class="muted">${esc(syncMsg || 'Bulutta yedekleniyor')}</div>`;
+      const warn = /Eşitlenemedi|Çevrimdışı/.test(syncMsg);
+      box.innerHTML = `${notice}<div class="acc-head">
+          <div class="avatar">${esc((user.email || '?')[0].toUpperCase())}</div>
+          <div class="meta"><b>${esc(user.email || 'Hesap')}</b>
+            <span class="muted"><span class="status-dot${warn ? ' warn' : ''}"></span>${esc(syncMsg || 'Bulutta yedekleniyor')}</span></div>
+        </div>
+        <div class="acc-actions"><button class="link" id="accSync">Şimdi eşitle</button>
+          <button class="link" id="accOut" style="color:var(--muted)">Çıkış yap</button></div>`;
+      $('accSync').onclick = () => sync();
       $('accOut').onclick = async () => {
         if (!confirm('Çıkış yapılsın mı? Yürüyüşlerin bu telefonda kalır.')) return;
         await sb.auth.signOut();
       };
       return;
     }
-    if (mailSent) {
-      box.innerHTML = `<div class="acc-line"><span>📧 <b>${esc(mailSent)}</b> adresine giriş bağlantısı gönderildi.</span></div>
-        <div class="muted">E-postandaki bağlantıya bu telefonda dokun. Gelmediyse spam klasörüne bak.</div>
-        <button class="link" id="accBack">Farklı e-posta</button>`;
-      $('accBack').onclick = () => { mailSent = ''; renderAccount(); };
+    if (pending) {
+      box.innerHTML = `${notice}<div class="acc-head">
+          <div class="avatar" style="background:#d97706">✉</div>
+          <div class="meta"><b>E-postanı kontrol et</b><span class="muted">${esc(pending.email)}</span></div>
+        </div>
+        <p class="muted" style="margin:10px 0 0">Giriş <b>henüz tamamlanmadı</b>. E-postadaki giriş bağlantısına bu telefonda dokun.
+          Bir kez giriş yapınca uygulama seni hep girişli tutar.</p>
+        <div class="acc-actions"><button class="link" id="accResend">Tekrar gönder</button>
+          <button class="link" id="accBack" style="color:var(--muted)">Farklı e-posta</button></div>`;
+      $('accResend').onclick = (e) => sendLink(pending.email, e.target);
+      $('accBack').onclick = () => { pending = null; store.del(KEY_PENDING); renderAccount(); };
       return;
     }
-    box.innerHTML = `<div class="acc-line"><span>☁️ Yürüyüşlerini buluta yedekle, telefon değişse de kaybolmasın.</span></div>
-      <form class="row" id="accForm" style="margin-top:8px">
-        <input type="email" id="accEmail" required placeholder="e-posta adresin" autocomplete="email">
-        <button class="btn small" style="flex:0 0 auto">Giriş</button>
+    box.innerHTML = `${notice}<div class="acc-head">
+        <div class="avatar" style="background:var(--muted)">☁</div>
+        <div class="meta"><b>Giriş yapılmadı</b><span class="muted">Yürüyüşlerin şu an sadece bu telefonda</span></div>
+      </div>
+      <form id="accForm">
+        <input type="email" id="accEmail" required placeholder="E-posta adresin" autocomplete="email">
+        <button class="btn small">Giriş bağlantısı gönder</button>
       </form>`;
-    $('accForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const email = $('accEmail').value.trim();
-      const btn = e.target.querySelector('button');
-      btn.disabled = true; btn.textContent = '…';
-      const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
-      if (error) {
-        btn.disabled = false; btn.textContent = 'Giriş';
-        alert(/rate|limit|seconds/i.test(error.message) ? 'Çok sık denendi, biraz bekleyip tekrar dene.' : 'Gönderilemedi: ' + error.message);
-        return;
-      }
-      mailSent = email; renderAccount();
-    };
+    $('accForm').onsubmit = (e) => { e.preventDefault(); sendLink($('accEmail').value.trim(), e.target.querySelector('button')); };
   }
 
   if (sb) {
@@ -827,6 +861,8 @@
       const was = user && user.id;
       user = session ? session.user : null;
       if (!user) syncMsg = '';
+      if (user && pending) { pending = null; store.del(KEY_PENDING); }
+      if (user && !was && urlInfo.login) { authNotice = ''; syncMsg = 'Giriş yapıldı ✓'; setTab('settings'); }
       renderAccount();
       if (user && user.id !== was) setTimeout(sync, 0);
     });
@@ -837,8 +873,9 @@
   let tab = 'walk';
   function setTab(t) {
     tab = t;
-    document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
-    ['walk', 'explore', 'daily'].forEach((n) => ($('p-' + n).hidden = n !== t));
+    document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+    ['walk', 'explore', 'daily', 'settings'].forEach((n) => ($('p-' + n).hidden = n !== t));
+    if (t === 'settings') renderAccount();
     map.closePopup();
 
     if (t === 'daily') { map.removeLayer(fog); map.addLayer(dayLayer); fillPlaces(); renderDaily(); drawDay(); }
@@ -859,11 +896,16 @@
   $('bStart').onclick = start;
   $('bPause').onclick = togglePause;
   $('bStop').onclick = stop;
-  document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
+  document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   $('bExport').onclick = exportData;
   $('bImport').onclick = () => $('fileIn').click();
   $('fileIn').onchange = (e) => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ''; };
-  map.on('dragstart', () => { follow = false; });
+  map.on('dragstart', () => { follow = false; $('bLocate').classList.remove('on'); });
+  $('bLocate').onclick = () => {
+    follow = true; $('bLocate').classList.add('on');
+    if (lastFix) map.setView(lastFix, Math.max(map.getZoom(), 17));
+    else note('Konum henüz alınamadı.');
+  };
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && recording()) lockScreen();
     if (document.visibilityState === 'visible') syncSoon();
