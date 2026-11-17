@@ -1113,6 +1113,8 @@
     const days = groupDays();
     renderTiles(days);
     renderChart();
+    renderCalendar();
+    renderRecords();
     renderForm();
     const box = $('days');
     box.innerHTML = '';
@@ -1187,6 +1189,109 @@
   function selectDay(k) {
     openDay = k;
     renderDaily(); drawDay();
+  }
+
+  // ---------- Takvim (son 26 hafta) ----------
+  function renderCalendar() {
+    const box = $('calendar');
+    if (!box) return;
+    const perDay = new Map();
+    for (const w of footWalks()) { const k = dayKey(w.start); perDay.set(k, (perDay.get(k) || 0) + w.dist); }
+    const WEEKS = 26, D = 864e5, today = new Date();
+    const thisMon = new Date(today.getFullYear(), today.getMonth(), today.getDate() - ((today.getDay() + 6) % 7));
+    const start = new Date(thisMon.getTime() - (WEEKS - 1) * 7 * D);
+    const W = Math.max(280, box.clientWidth || 320), left = 18, gap = 2;
+    const cs = Math.floor((W - left - gap * (WEEKS - 1)) / WEEKS), top = 14, H = top + 7 * (cs + gap);
+    const level = (m) => (!m ? 0 : m < 2000 ? 1 : m < 5000 ? 2 : m < 8000 ? 3 : 4);
+    const op = [0, 0.3, 0.55, 0.8, 1];
+    const css = getComputedStyle(document.documentElement), muted = css.getPropertyValue('--muted').trim();
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Son 26 haftada yürüyüş yapılan günler">`;
+    ['Pt', '', 'Ça', '', 'Cu', '', 'Pa'].forEach((l, i) => { if (l) svg += `<text x="0" y="${top + i * (cs + gap) + cs - 2}" font-size="9" fill="${muted}">${l}</text>`; });
+    let lastMonth = -1, lastLabelX = -99, cellsHtml = '';
+    for (let wk = 0; wk < WEEKS; wk++) {
+      for (let d = 0; d < 7; d++) {
+        const t = new Date(start.getFullYear(), start.getMonth(), start.getDate() + wk * 7 + d);
+        if (t > today) continue;
+        const k = dayKey(t), m = perDay.get(k) || 0, lv = level(m);
+        const x = left + wk * (cs + gap), y = top + d * (cs + gap);
+        if (d === 0 && t.getMonth() !== lastMonth) {
+          lastMonth = t.getMonth();
+          // ay adları üst üste binmesin; takvim ayın sonundan başlıyorsa o ayın adını yazma
+          if (x - lastLabelX >= 26 && !(wk === 0 && t.getDate() > 10)) {
+            svg += `<text x="${x}" y="9" font-size="9" fill="${muted}">${t.toLocaleDateString('tr-TR', { month: 'short' })}</text>`;
+            lastLabelX = x;
+          }
+        }
+        cellsHtml += `<rect data-k="${k}" data-m="${m}" x="${x}" y="${y}" width="${cs}" height="${cs}" rx="2"
+          style="fill:${lv ? 'var(--accent)' : 'var(--text)'};fill-opacity:${lv ? op[lv] : 0.07}${k === dayKey(today) ? ';stroke:var(--text);stroke-width:1' : ''}"/>`;
+      }
+    }
+    svg += cellsHtml + '</svg>';
+    box.innerHTML = svg + `<div class="tip" hidden></div>
+      <div class="cal-legend"><span>Az</span>${op.map((o, i) => `<i style="background:${i ? 'var(--accent)' : 'var(--text)'};opacity:${i ? o : 0.07}"></i>`).join('')}<span>Çok</span></div>`;
+    const tip = box.querySelector('.tip'), el = box.querySelector('svg');
+    const show = (e) => {
+      const r = e.target.closest('rect');
+      if (!r) { tip.hidden = true; return; }
+      const [y, mo, dd] = r.dataset.k.split('-').map(Number), m = +r.dataset.m;
+      tip.textContent = `${new Date(y, mo - 1, dd).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', weekday: 'short' })}: ${m ? fmtKm(m) + ' km' : 'yürüyüş yok'}`;
+      const br = el.getBoundingClientRect(), rr = r.getBoundingClientRect();
+      tip.style.left = Math.min(Math.max(rr.left - br.left + rr.width / 2, 70), br.width - 70) + 'px';
+      tip.style.top = (rr.top - br.top) + 'px';
+      tip.hidden = false;
+    };
+    el.addEventListener('pointermove', show);
+    el.addEventListener('pointerleave', () => (tip.hidden = true));
+    el.addEventListener('click', (e) => {
+      const r = e.target.closest('rect');
+      if (r && +r.dataset.m) { selectDay(r.dataset.k); $('days').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    });
+  }
+
+  // ---------- Kişisel rekorlar ----------
+  const splitCache = new WeakMap();
+  const splitsOf = (w) => { if (!splitCache.has(w)) splitCache.set(w, splits(w) || []); return splitCache.get(w); };
+  function renderRecords() {
+    const box = $('records');
+    if (!box) return;
+    const ws = footWalks();
+    if (!ws.length) { box.innerHTML = '<div class="empty">İlk yürüyüşünden sonra rekorların burada görünecek.</div>'; return; }
+    const best = (arr, f) => arr.reduce((b, w) => (f(w) > (b ? f(b) : -Infinity) ? w : b), null);
+    const rows = [];
+    const longest = best(ws, (w) => w.dist);
+    rows.push(['📏', 'En uzun yürüyüş', `${fmtKm(longest.dist)} km`, longest]);
+    const lengthy = best(ws, (w) => w.dur);
+    if (lengthy.dur) rows.push(['⏱', 'En uzun süre', fmtDur(lengthy.dur), lengthy]);
+    let fk = null, fkSec = Infinity;
+    for (const w of ws) for (const s of splitsOf(w)) if (s.part === 1000 && s.sec > 0 && s.sec < fkSec) { fkSec = s.sec; fk = w; }
+    if (fk) { const t = Math.round(fkSec); rows.push(['⚡', 'En hızlı kilometre', `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')} dk`, fk]); }
+    const paced = ws.filter((w) => w.dist >= 1000 && w.dur > 0);
+    if (paced.length) { const bp = best(paced, (w) => w.dist / w.dur); rows.push(['🏃', 'En iyi ortalama tempo', `${fmtPace(bp.dur, bp.dist)} dk/km`, bp]); }
+    const explorer = best(ws, (w) => (walkMeta.get(w.id) || {}).fresh || 0);
+    const fr = (walkMeta.get(explorer.id) || {}).fresh || 0;
+    if (fr) rows.push(['🧭', 'En çok keşif', `${fr} yeni nokta`, explorer]);
+    // En uzun seri
+    const days = [...new Set(ws.map((w) => dayKey(w.start)))].sort();
+    let run = 0, bestRun = 0, prev = null;
+    for (const k of days) {
+      const [y, m, d] = k.split('-').map(Number), t = new Date(y, m - 1, d).getTime();
+      run = prev !== null && Math.round((t - prev) / 864e5) === 1 ? run + 1 : 1;
+      bestRun = Math.max(bestRun, run); prev = t;
+    }
+    if (bestRun > 1) rows.push(['🔥', 'En uzun seri', `${bestRun} gün üst üste`, null]);
+    // En çok km yapılan hafta
+    const weeks = new Map();
+    for (const w of ws) {
+      const d = new Date(w.start), mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)).getTime();
+      weeks.set(mon, (weeks.get(mon) || 0) + w.dist);
+    }
+    const [bw, bkm] = [...weeks.entries()].sort((p, q) => q[1] - p[1])[0];
+    rows.push(['📅', 'En iyi hafta', `${fmtKm(bkm, 1)} km`, null, new Date(bw).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' }) + ' haftası']);
+    box.innerHTML = rows.map(([ic, label, val, w, sub], i) => `<div class="rec${w ? ' tap' : ''}" data-i="${i}">
+        <span class="ric">${ic}</span><div class="meta"><b>${label}</b>
+        <small>${w ? esc(new Date(w.start).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' })) : esc(sub || '')}</small></div>
+        <span class="rv">${esc(val)}</span></div>`).join('');
+    box.querySelectorAll('.rec.tap').forEach((el) => (el.onclick = () => openDetail(rows[+el.dataset.i][3].id)));
   }
 
   // ---------- Antrenmanlar listesi ----------
@@ -1993,7 +2098,16 @@
     if (lastFix) map.setView(lastFix, Math.max(map.getZoom(), 17));
     else note('Konum henüz alınamadı.');
   };
+  let hiddenAt = null;
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && cur && !NATIVE) hiddenAt = Date.now();
+    if (document.visibilityState === 'visible' && hiddenAt) {
+      const gap = Date.now() - hiddenAt; hiddenAt = null;
+      if (cur && gap > 30000) {
+        note(`Uygulama ${fmtDur(gap)} arka planda kaldı; bu sürede konum alınamamış olabilir. Ekran kapalıyken kayıt için Android uygulamasını kullan.`, true);
+        say('Uygulama arka plandaydı. Kayıt bu sürede eksik kalmış olabilir.');
+      }
+    }
     if (document.visibilityState === 'visible' && recording()) lockScreen();
     if (document.visibilityState === 'visible') syncSoon();
   });
