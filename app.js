@@ -303,6 +303,7 @@
   let cur = store.get(KEY_CURRENT, null);
   let watchId = null, tick = null, wakeLock = null, follow = true, lastFix = null, geoErr = false;
   let liveCells = new Map(), liveFresh = 0, liveLaps = 0, livePts = 0;
+  let lastAcc = null, bestAcc = Infinity; // GPS doğruluğu (m)
 
   const elapsed = () => (cur ? cur.activeMs + (cur.resumedAt ? Date.now() - cur.resumedAt : 0) : 0);
   const recording = () => !!(cur && cur.resumedAt);
@@ -330,7 +331,12 @@
     $('sTime').textContent = fmtTime(t);
     $('sPace').textContent = fmtPace(t, d);
     const parts = [];
-    if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta keşfettin`);
+    if (recording()) {
+      if (lastAcc === null) parts.push('📡 Konum bekleniyor…');
+      else if (lastAcc > MAX_ACCURACY) parts.push(`📡 <b>GPS zayıf</b> (±${Math.round(lastAcc)} m) · açık alana çık`);
+      else parts.push(`📡 GPS iyi (±${Math.round(lastAcc)} m)`);
+    }
+    if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
     if (cur && liveLaps) parts.push(`<b>${liveLaps}</b> tur`);
     $('liveExtra').innerHTML = parts.join(' · ');
   }
@@ -356,7 +362,8 @@
     } else if (follow && tab === 'walk') map.panTo(lastFix, { animate: true });
 
     if (!recording()) return;
-    if (accuracy > MAX_ACCURACY) { note(`GPS sinyali zayıf (±${Math.round(accuracy)} m), bekleniyor…`); return; }
+    lastAcc = accuracy; bestAcc = Math.min(bestAcc, accuracy);
+    if (accuracy > MAX_ACCURACY) { renderStats(); return; }
 
     const seg = cur.segs[cur.segs.length - 1];
     const prev = seg[seg.length - 1];
@@ -395,6 +402,7 @@
 
   function start() {
     cur = { start: Date.now(), segs: [[]], dist: 0, activeMs: 0, resumedAt: Date.now() };
+    bestAcc = Infinity;
     liveRebuild(); saveCurrent();
     follow = true;
     startWatch(); lockScreen(); startTick();
@@ -420,11 +428,16 @@
 
   function stop() {
     if (!cur) return;
-    if (cur.resumedAt) { cur.activeMs += Date.now() - cur.resumedAt; cur.resumedAt = null; }
     const segs = cur.segs.filter((s) => s.length >= 2);
     if (!segs.length) {
-      if (!confirm('Henüz yol kaydedilmedi. Yine de bitirilsin mi? (Kaydedilmeyecek)')) { renderButtons(); return; }
+      const why = lastAcc === null
+        ? 'Konum hiç alınamadı. Konum izninin açık olduğundan emin ol.'
+        : bestAcc > MAX_ACCURACY
+          ? `GPS sinyali zayıf olduğu için yol çizilemedi (en iyi ±${Math.round(bestAcc)} m). Ev içinde GPS düzgün çalışmaz; dışarıda, açık havada dene.`
+          : 'Yol çizilecek kadar yürünmedi. Birkaç on metre yürüdükten sonra bitir.';
+      if (!confirm(why + '\n\nBu yürüyüş kaydedilmeden bitirilsin mi?')) { renderButtons(); return; }
     } else {
+      if (cur.resumedAt) { cur.activeMs += Date.now() - cur.resumedAt; cur.resumedAt = null; }
       const w = {
         id: cur.start.toString(36), start: cur.start, end: Date.now(),
         dist: Math.round(cur.dist), dur: cur.activeMs,
