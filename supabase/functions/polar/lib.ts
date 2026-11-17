@@ -75,6 +75,7 @@ export function toWalk(id: string, ex: Record<string, unknown>, pts: Pt[]) {
     dist: Math.round(typeof ex.distance === 'number' && ex.distance > 0 ? ex.distance : dist),
     dur,
     segs: [kept.map((p) => [+p.lat.toFixed(6), +p.lon.toFixed(6)])],
+    ...(kept.every((p) => p.t !== null) ? { tt: [kept.map((p) => Math.round(((p.t as number) - start) / 1000))] } : {}),
     source: 'polar',
     sport: SPORTS[sportKey] || (sportKey ? sportKey.toLowerCase().replace(/_/g, ' ') : 'Polar'),
   };

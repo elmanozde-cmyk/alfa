@@ -44,6 +44,13 @@
   const KEY_MODE = 'izim.mode.v1';
   let mode = store.get(KEY_MODE, 'normal');
   const FOG_COLOR = '#b8c2c9', FOG_EDGE = '#94a1ab';
+  // Araç yolları: istatistiklere karışmaz; haritada kesikli mor çizgi; ayarlardan gizlenebilir
+  const KEY_SHOWCAR = 'izim.showCar.v1';
+  let showCar = store.get(KEY_SHOWCAR, true);
+  const CAR = '#7c3aed';
+  const isCar = (w) => w.type === 'arac';
+  const footWalks = () => walks.filter((w) => !isCar(w));
+  const visibleWalks = () => (showCar ? walks : footWalks());
   const saveWalks = () => store.set(KEY_WALKS, walks);
 
   // ---------- Yardımcılar ----------
@@ -156,9 +163,11 @@
   // Tüm yürüyüşlerden keşif haritası
   let cells = new Map();   // "x,y" -> {x,y,p,w,days:Set,first,last}
   let walkMeta = new Map(); // id -> {fresh, laps}
+  let carCells = new Set();
   function buildIndex() {
-    cells = new Map(); walkMeta = new Map();
-    const sorted = [...walks].sort((a, b) => a.start - b.start);
+    cells = new Map(); walkMeta = new Map(); carCells = new Set();
+    for (const w of walks) if (isCar(w)) walkPath(w.segs, (la, ln) => carCells.add(cellKey(la, ln)));
+    const sorted = footWalks().sort((a, b) => a.start - b.start);
     for (const w of sorted) {
       const { passes, laps } = analyzeWalk(w.segs);
       const day = dayKey(w.start);
@@ -303,6 +312,7 @@
   function fogKeys() {
     const keys = new Set(cells.keys());
     for (const k of liveCells.keys()) keys.add(k);
+    if (showCar) for (const k of carCells) keys.add(k);
     return keys;
   }
   function setupGlFog() {
@@ -337,11 +347,16 @@
     if (now) run(); else glFogTimer = setTimeout(run, 1200);
   }
 
+  function routeStyle(w, strong) {
+    return isCar(w)
+      ? { color: CAR, weight: strong ? 5 : 3, opacity: strong ? 0.85 : 0.6, dashArray: '8 8', lineCap: 'round', interactive: false }
+      : { color: ROUTE, weight: strong ? 6 : 4, opacity: strong ? 0.9 : 0.55, lineCap: 'round', lineJoin: 'round', interactive: false };
+  }
   // Normal modda tüm yürüyüşler ince çizgi olarak
   const routesLayer = L.layerGroup();
   function drawRoutes() {
     routesLayer.clearLayers();
-    for (const w of walks) L.polyline(w.segs, { color: ROUTE, weight: 4, opacity: 0.55, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(routesLayer);
+    for (const w of visibleWalks()) L.polyline(w.segs, routeStyle(w, false)).addTo(routesLayer);
   }
   function onIndexChanged() { drawRoutes(); updateGlFog(true); if (map.hasLayer(fog)) fog.redraw(); }
 
@@ -382,6 +397,10 @@
   let watchId = null, tick = null, wakeLock = null, follow = true, lastFix = null, geoErr = false;
   let liveCells = new Map(), liveFresh = 0, liveLaps = 0, livePts = 0;
   let lastAcc = null, bestAcc = Infinity; // GPS doğruluğu (m)
+  let startType = 'yuruyus', carHits = 0, carHint = false;
+  const limits = () => (cur && cur.type === 'arac'
+    ? { acc: 50, step: 20, speed: 70 }
+    : { acc: MAX_ACCURACY, step: MIN_STEP, speed: MAX_SPEED });
 
   const elapsed = () => (cur ? cur.activeMs + (cur.resumedAt ? Date.now() - cur.resumedAt : 0) : 0);
   const recording = () => !!(cur && cur.resumedAt);
@@ -407,14 +426,18 @@
     const d = cur ? cur.dist : 0, t = elapsed();
     $('sDist').textContent = fmtKm(d);
     $('sTime').textContent = fmtTime(t);
-    $('sPace').textContent = fmtPace(t, d);
+    const car = cur && cur.type === 'arac';
+    $('sPace').textContent = car ? (d > 50 && t > 0 ? (d / 1000 / (t / 3600000)).toFixed(0) : '–') : fmtPace(t, d);
+    $('sPaceLbl').textContent = car ? 'km/sa' : 'dk/km';
     const parts = [];
     if (!cur || recording()) {
       if (lastAcc === null) parts.push('📡 Konum bekleniyor…');
       else if (lastAcc > MAX_ACCURACY) parts.push(`📡 <b>GPS zayıf</b> (±${Math.round(lastAcc)} m) · açık alana çık`);
       else parts.push(`📡 GPS ${cur ? 'iyi' : 'hazır'} (±${Math.round(lastAcc)} m)`);
     }
-    if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
+    if (cur && cur.type === 'arac') parts.push('🚗 Araç kaydı');
+    else if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
+    if (carHint && cur && cur.type !== 'arac') parts.push('<br>🚗 <b>Araçta gibisin.</b> Bitir, sonra Araç seçip yeniden başlat.');
     if (cur && liveLaps) parts.push(`<b>${liveLaps}</b> tur`);
     $('liveExtra').innerHTML = parts.join(' · ');
     renderHr();
@@ -476,6 +499,9 @@
   }
 
   function renderButtons() {
+    $('typeSeg').hidden = !!cur;
+    document.querySelectorAll('#typeSeg [data-type]').forEach((b) => b.classList.toggle('on', b.dataset.type === startType));
+    liveLine.setStyle(cur && cur.type === 'arac' ? { color: CAR, dashArray: '10 8' } : { color: ROUTE, dashArray: null });
     $('bStart').hidden = !!cur;
     $('bPause').hidden = !cur;
     $('bStop').hidden = !cur;
@@ -499,20 +525,29 @@
     lastAcc = accuracy;
     if (!recording()) { renderStats(); return; }
     bestAcc = Math.min(bestAcc, accuracy);
-    if (accuracy > MAX_ACCURACY) { renderStats(); return; }
+    const lim = limits();
+    if (accuracy > lim.acc) { renderStats(); return; }
 
     const seg = cur.segs[cur.segs.length - 1];
     const prev = seg[seg.length - 1];
     if (prev) {
       const d = haversine(prev, [lat, lng]);
-      if (d < MIN_STEP) return;
-      if (d / Math.max(1, (t - prev[2]) / 1000) > MAX_SPEED) return;
+      if (d < lim.step) return;
+      const v = d / Math.max(1, (t - prev[2]) / 1000);
+      if (v > lim.speed) {
+        // Yürürken sürekli araç hızı: büyük ihtimalle araçtasın
+        if (cur.type !== 'arac' && v < 70 && ++carHits >= 5 && !carHint) { carHint = true; renderStats(); }
+        return;
+      }
+      carHits = 0;
       cur.dist += d;
     }
     const p = [+lat.toFixed(6), +lng.toFixed(6), t];
     seg.push(p);
-    liveAdd(prev || null, p);
-    if (++livePts % 8 === 0) liveLaps = analyzeWalk(cur.segs).laps;
+    if (cur.type !== 'arac') {
+      liveAdd(prev || null, p);
+      if (++livePts % 8 === 0) liveLaps = analyzeWalk(cur.segs).laps;
+    }
     drawLive(); renderStats(); saveCurrent();
     if (map.hasLayer(fog)) fog.redraw();
   }
@@ -537,8 +572,8 @@
   function stopTick() { clearInterval(tick); tick = null; }
 
   function start() {
-    cur = { start: Date.now(), segs: [[]], dist: 0, activeMs: 0, resumedAt: Date.now() };
-    bestAcc = Infinity;
+    cur = { start: Date.now(), segs: [[]], dist: 0, activeMs: 0, resumedAt: Date.now(), type: startType };
+    bestAcc = Infinity; carHits = 0; carHint = false;
     liveRebuild(); saveCurrent();
     follow = true;
     startWatch(); lockScreen(); startTick();
@@ -578,13 +613,16 @@
         id: cur.start.toString(36), start: cur.start, end: Date.now(),
         dist: Math.round(cur.dist), dur: cur.activeMs,
         segs: segs.map((s) => s.map((p) => [p[0], p[1]])),
+        tt: segs.map((s) => s.map((p) => Math.round((p[2] - cur.start) / 1000))), // başlangıçtan saniye
       };
+      if (cur.type === 'arac') w.type = 'arac';
       if (cur.hr && cur.hr.n) w.hr = { avg: Math.round(cur.hr.sum / cur.hr.n), max: cur.hr.max, s: cur.hr.s };
       walks.unshift(w);
       saveWalks(); syncSoon();
       buildIndex();
       const m = walkMeta.get(w.id);
-      note(`Kaydedildi: ${fmtKm(w.dist)} km · ${fmtTime(w.dur)} · ${m.fresh} yeni nokta${m.laps ? ` · ${m.laps} tur` : ''}`);
+      if (isCar(w)) note(`🚗 Araç yolu kaydedildi: ${fmtKm(w.dist)} km · ${fmtTime(w.dur)}`);
+      else note(`Kaydedildi: ${fmtKm(w.dist)} km · ${fmtTime(w.dur)} · ${m.fresh} yeni nokta${m.laps ? ` · ${m.laps} tur` : ''}`);
       fillPlaces();
     }
     cur = null;
@@ -665,7 +703,7 @@
 
   function groupDays() {
     const days = new Map();
-    for (const w of walks) {
+    for (const w of visibleWalks()) {
       const k = dayKey(w.start);
       if (!days.has(k)) days.set(k, []);
       days.get(k).push(w);
@@ -686,11 +724,11 @@
     const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).getTime();
     const month = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
     let wk = 0, mo = 0, tot = 0;
-    for (const w of walks) { tot += w.dist; if (w.start >= monday) wk += w.dist; if (w.start >= month) mo += w.dist; }
+    for (const w of footWalks()) { tot += w.dist; if (w.start >= monday) wk += w.dist; if (w.start >= month) mo += w.dist; }
     $('dWeek').textContent = fmtKm(wk, 1);
     $('dMonth').textContent = fmtKm(mo, 1);
     $('dTotal').textContent = fmtKm(tot, 1);
-    $('dStreak').textContent = streak(new Set(days.map((d) => d[0])));
+    $('dStreak').textContent = streak(new Set(footWalks().map((w) => dayKey(w.start))));
   }
 
   // Basit çubuk grafik (tek seri, dokununca değer balonu)
@@ -732,7 +770,7 @@
 
   function renderChart() {
     const perDay = new Map();
-    for (const w of walks) { const k = dayKey(w.start); perDay.set(k, (perDay.get(k) || 0) + w.dist); }
+    for (const w of footWalks()) { const k = dayKey(w.start); perDay.set(k, (perDay.get(k) || 0) + w.dist); }
     const letters = ['P', 'P', 'S', 'Ç', 'P', 'C', 'C']; // Pazar..Cumartesi
     const data = [];
     for (let i = 13; i >= 0; i--) {
@@ -750,7 +788,7 @@
   const RUN_SPORTS = new Set(['Koşu', 'Arazi koşusu']);
   let formKind = 'yuruyus';
   const kindOf = (w) => (w.source === 'polar' && RUN_SPORTS.has(w.sport) ? 'kosu' : 'yuruyus');
-  const hrWalks = (kind) => walks.filter((w) => w.hr && w.hr.avg > 40 && w.dur >= 5 * 60000 && w.dist >= 300 && kindOf(w) === kind);
+  const hrWalks = (kind) => footWalks().filter((w) => w.hr && w.hr.avg > 40 && w.dur >= 5 * 60000 && w.dist >= 300 && kindOf(w) === kind);
   function hrAgg(ws) {
     if (!ws.length) return null;
     const dur = ws.reduce((s, w) => s + w.dur, 0), dist = ws.reduce((s, w) => s + w.dist, 0);
@@ -827,7 +865,9 @@
       return;
     }
     for (const [k, list] of days) {
-      const dist = list.reduce((s, w) => s + w.dist, 0), dur = list.reduce((s, w) => s + w.dur, 0);
+      const feet = list.filter((w) => !isCar(w)), cars = list.filter(isCar);
+      const dist = feet.reduce((s, w) => s + w.dist, 0), dur = feet.reduce((s, w) => s + w.dur, 0);
+      const carKm = cars.reduce((s, w) => s + w.dist, 0);
       const fresh = list.reduce((s, w) => s + (walkMeta.get(w.id)?.fresh || 0), 0);
       const laps = list.reduce((s, w) => s + (walkMeta.get(w.id)?.laps || 0), 0);
       const places = [...new Set(list.map((w) => w.place).filter(Boolean))];
@@ -835,7 +875,7 @@
       el.className = 'day' + (openDay === k ? ' on' : '');
       el.innerHTML = `<div class="day-head">
           <div class="l1"><span>${esc(dayLabel(k))}</span><span>${fmtKm(dist)} km</span></div>
-          <div class="l2">${list.length} yürüyüş · ${fmtDur(dur)} · ${fmtClock(list[0].start)}–${fmtClock(list[list.length - 1].end)}${laps ? ` · ${laps} tur` : ''}</div>
+          <div class="l2">${feet.length ? `${feet.length} yürüyüş · ${fmtDur(dur)} · ` : ''}${fmtClock(list[0].start)}–${fmtClock(list[list.length - 1].end)}${laps ? ` · ${laps} tur` : ''}${cars.length ? ` · <span style="color:${CAR}">🚗 ${fmtKm(carKm, 1)} km araçla</span>` : ''}</div>
           <div class="l3">${places.length ? '📍 ' + esc(places.join(' → ')) : '<span class="muted">Konum adı alınıyor…</span>'}${fresh ? ` <span class="badge">+${fresh} yeni nokta</span>` : ''}</div>
         </div>`;
       el.querySelector('.day-head').onclick = () => selectDay(openDay === k ? null : k);
@@ -846,19 +886,14 @@
           const m = walkMeta.get(w.id) || {};
           const row = document.createElement('div');
           row.className = 'walk';
-          row.innerHTML = `<div class="meta"><div><b>${fmtClock(w.start)}</b> · ${fmtKm(w.dist)} km · ${fmtDur(w.dur)} · ${fmtPace(w.dur, w.dist)} dk/km
-              ${m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}${w.source === 'polar' ? `<span class="badge">Polar · ${esc(w.sport || 'antrenman')}</span>` : ''}</div>
-              ${w.hr ? `<small style="color:#be123c">♥ ort ${w.hr.avg} · en yüksek ${w.hr.max} bpm</small><br>` : ''}
-              <small>${esc(w.place || '')}${m.fresh ? `${w.place ? ' · ' : ''}${m.fresh} yeni nokta` : ''}</small></div>
-            <button title="Sil" aria-label="Sil">✕</button>`;
-          row.querySelector('button').onclick = () => {
-            if (!confirm('Bu yürüyüş silinsin mi?')) return;
-            walks = walks.filter((x) => x.id !== w.id);
-            markDeleted(w.id);
-            saveWalks(); buildIndex(); syncSoon();
-            if (!walks.some((x) => dayKey(x.start) === k)) openDay = null;
-            renderDaily(); drawDay();
-          };
+          row.innerHTML = isCar(w)
+            ? `<div class="meta"><div><b>${fmtClock(w.start)}</b> · <span style="color:${CAR}">🚗 Araç</span> · ${fmtKm(w.dist)} km · ${fmtDur(w.dur)}</div>
+                <small>${esc(w.place || '')}</small></div><span class="chev">›</span>`
+            : `<div class="meta"><div><b>${fmtClock(w.start)}</b> · ${fmtKm(w.dist)} km · ${fmtDur(w.dur)} · ${fmtPace(w.dur, w.dist)} dk/km
+                ${m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}${w.source === 'polar' ? `<span class="badge">Polar · ${esc(w.sport || 'antrenman')}</span>` : ''}</div>
+                ${w.hr ? `<small style="color:#be123c">♥ ort ${w.hr.avg} · en yüksek ${w.hr.max} bpm</small><br>` : ''}
+                <small>${esc(w.place || '')}${m.fresh ? `${w.place ? ' · ' : ''}${m.fresh} yeni nokta` : ''}</small></div><span class="chev">›</span>`;
+          row.onclick = () => openDetail(w.id);
           wl.appendChild(row);
         }
         el.appendChild(wl);
@@ -869,10 +904,10 @@
 
   function drawDay() {
     dayLayer.clearLayers();
-    const list = openDay ? walks.filter((w) => dayKey(w.start) === openDay) : walks;
+    const list = (openDay ? walks.filter((w) => dayKey(w.start) === openDay) : walks).filter((w) => showCar || !isCar(w));
     for (const w of list) {
-      L.polyline(w.segs, { color: ROUTE, weight: openDay ? 6 : 4, opacity: openDay ? 0.9 : 0.55, lineCap: 'round', lineJoin: 'round' })
-        .on('click', () => selectDay(dayKey(w.start)))
+      L.polyline(w.segs, { ...routeStyle(w, !!openDay), interactive: true })
+        .on('click', () => (openDay ? openDetail(w.id) : selectDay(dayKey(w.start))))
         .addTo(dayLayer);
     }
     const pts = list.flatMap((w) => w.segs.flat());
@@ -882,6 +917,321 @@
   function selectDay(k) {
     openDay = k;
     renderDaily(); drawDay();
+  }
+
+  // ---------- Yürüyüş detayı ----------
+  let detailId = null;
+
+  // Kilometre başına süre (sadece hareket halindeki süre; duraklamalar sayılmaz)
+  function splits(w) {
+    if (!w.tt) return null;
+    const out = [];
+    let dist = 0, time = 0, kmT = 0, next = 1000;
+    w.segs.forEach((s, si) => {
+      const tt = w.tt[si] || [];
+      for (let i = 1; i < s.length; i++) {
+        const dd = haversine(s[i - 1], s[i]), dt = (tt[i] ?? 0) - (tt[i - 1] ?? 0);
+        if (dt <= 0 || dd <= 0) { dist += dd; continue; }
+        let d0 = dist, t0 = time;
+        while (d0 + dd >= next && dist + dd >= next) {
+          const tCross = t0 + dt * (next - dist) / dd;
+          out.push({ km: out.length + 1, sec: tCross - kmT, part: 1000 });
+          kmT = tCross; next += 1000;
+        }
+        dist += dd; time += dt;
+      }
+    });
+    const rest = dist - (next - 1000);
+    if (rest >= 100 && time > kmT) out.push({ km: out.length + 1, sec: time - kmT, part: rest });
+    return out;
+  }
+
+  // Yolu boyunca her kilometrede işaret
+  function kmMarks(w) {
+    const out = [];
+    let dist = 0, next = 1000;
+    for (const s of w.segs) for (let i = 1; i < s.length; i++) {
+      const dd = haversine(s[i - 1], s[i]);
+      while (dd > 0 && dist + dd >= next) {
+        const f = (next - dist) / dd;
+        out.push({ km: next / 1000, ll: [s[i - 1][0] + (s[i][0] - s[i - 1][0]) * f, s[i - 1][1] + (s[i][1] - s[i - 1][1]) * f] });
+        next += 1000;
+      }
+      dist += dd;
+    }
+    return out;
+  }
+
+  // Nabız çizgi grafiği (tek seri, dokununca değer)
+  function drawLine(box, pts) {
+    const tip = box.querySelector('.tip');
+    box.querySelector('svg')?.remove();
+    const W = Math.max(260, box.clientWidth || 300), H = 130, top = 12, base = 104, left = 30;
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const x0 = xs[0], x1 = xs[xs.length - 1] || 1, y0 = Math.floor(Math.min(...ys) / 10) * 10, y1 = Math.ceil(Math.max(...ys) / 10) * 10 || 1;
+    const X = (v) => left + (v - x0) / Math.max(1, x1 - x0) * (W - left - 4);
+    const Y = (v) => base - (v - y0) / Math.max(1, y1 - y0) * (base - top);
+    const css = getComputedStyle(document.documentElement);
+    const muted = css.getPropertyValue('--muted').trim(), line = css.getPropertyValue('--line').trim();
+    const red = '#e11d48';
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+    const mmss = (s) => { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Yürüyüş boyunca nabız">`;
+    for (const v of [y0, (y0 + y1) / 2, y1]) {
+      svg += `<line x1="${left}" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" stroke="${line}"/>`;
+      svg += `<text x="0" y="${Y(v) + 4}" font-size="11" fill="${muted}">${Math.round(v)}</text>`;
+    }
+    svg += `<path d="${d} L${X(x1)},${base} L${X(x0)},${base} Z" fill="${red}" fill-opacity=".08"/>`;
+    svg += `<path d="${d}" fill="none" stroke="${red}" stroke-width="2" stroke-linejoin="round"/>`;
+    svg += `<text x="${left}" y="${H - 6}" font-size="11" fill="${muted}">0:00</text>`;
+    svg += `<text x="${W}" y="${H - 6}" font-size="11" fill="${muted}" text-anchor="end">${mmss(x1)}</text>`;
+    svg += `<line class="xh" x1="0" x2="0" y1="${top}" y2="${base}" stroke="${muted}" stroke-dasharray="3 3" visibility="hidden"/>`;
+    svg += `<circle class="dot" r="4.5" fill="${red}" stroke="#fff" stroke-width="2" visibility="hidden"/>`;
+    svg += `<rect x="${left}" y="0" width="${W - left}" height="${H}" fill="transparent"/></svg>`;
+    box.insertAdjacentHTML('beforeend', svg);
+    const el = box.querySelector('svg'), xh = el.querySelector('.xh'), dot = el.querySelector('.dot');
+    const show = (e) => {
+      const r = el.getBoundingClientRect(), vx = (e.clientX - r.left) / r.width * W;
+      let best = 0;
+      for (let i = 1; i < pts.length; i++) if (Math.abs(X(pts[i][0]) - vx) < Math.abs(X(pts[best][0]) - vx)) best = i;
+      const p = pts[best], px = X(p[0]);
+      xh.setAttribute('x1', px); xh.setAttribute('x2', px); xh.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', px); dot.setAttribute('cy', Y(p[1])); dot.setAttribute('visibility', 'visible');
+      tip.textContent = `${mmss(p[0])} · ${p[1]} bpm`;
+      tip.style.left = Math.min(Math.max(px / W * r.width, 60), r.width - 60) + 'px';
+      tip.hidden = false;
+    };
+    el.addEventListener('pointermove', show);
+    el.addEventListener('pointerdown', show);
+    el.addEventListener('pointerleave', () => { tip.hidden = true; xh.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); });
+  }
+
+  function openDetail(id) {
+    const w = walks.find((x) => x.id === id);
+    if (!w) return;
+    detailId = id;
+    $('p-daily').hidden = true;
+    const p = $('p-detail');
+    p.hidden = false;
+    const m = walkMeta.get(w.id) || {};
+    const car = isCar(w);
+    const sp = car ? null : splits(w);
+    const tiles = car
+      ? [[fmtKm(w.dist), 'km'], [fmtDur(w.dur), 'süre'], [(w.dist / 1000 / Math.max(1e-9, w.dur / 3600000)).toFixed(0), 'ort. km/sa']]
+      : [[fmtKm(w.dist), 'km'], [fmtDur(w.dur), 'süre'], [fmtPace(w.dur, w.dist), 'dk/km'],
+        [w.hr ? w.hr.avg : '–', 'ort. nabız'], [w.hr ? w.hr.max : '–', 'en yüksek'], [m.fresh || 0, 'yeni nokta']];
+    let splitHtml = '';
+    if (sp && sp.length) {
+      const paces = sp.map((s) => s.sec / (s.part / 1000));
+      const fastest = Math.min(...paces), slowest = Math.max(...paces);
+      splitHtml = '<h3>Kilometre tempoları</h3><div class="splits">' + sp.map((s, i) => {
+        const pace = paces[i];
+        const wdt = slowest === fastest ? 100 : 40 + 60 * (slowest - pace) / (slowest - fastest);
+        const tot = Math.round(pace), mm = Math.floor(tot / 60), ss = String(tot % 60).padStart(2, '0');
+        return `<div class="split"><span class="k">${s.part < 1000 ? fmtKm(s.part, 2) : s.km}</span>
+          <span class="bar"><i style="width:${wdt.toFixed(0)}%"></i></span><span class="v">${mm}:${ss}${pace === fastest && sp.length > 1 ? ' ⚡' : ''}</span></div>`;
+      }).join('') + '</div>';
+    } else if (!car) splitHtml = '<h3>Kilometre tempoları</h3><div class="muted">Bu kayıtta zaman bilgisi yok (eski kayıt ya da 1 km’den kısa).</div>';
+    const hrHtml = car ? '' : (w.hr && w.hr.s && w.hr.s.length >= 3
+      ? '<h3>Nabız</h3><div class="chart" id="hrChart"><div class="tip" hidden></div></div>'
+      : `<h3>Nabız</h3><div class="muted">${w.hr ? `Ortalama ${w.hr.avg}, en yüksek ${w.hr.max} bpm. Ayrıntılı nabız grafiği yok.` : 'Bu kayıtta nabız yok. Yürüyüşe başlamadan önce ♥ Nabız bağla.'}</div>`);
+    p.innerHTML = `<div class="det-head">
+        <button class="icon-btn" id="detBack" aria-label="Geri">‹</button>
+        <div class="meta"><b>${esc(new Date(w.start).toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' }))}</b>
+          <small>${fmtClock(w.start)}–${fmtClock(w.end)}${w.place ? ' · ' + esc(w.place) : ''}</small></div>
+        ${car ? `<span class="badge" style="background:rgba(124,58,237,.14);color:${CAR}">🚗 Araç</span>` : w.source === 'polar' ? `<span class="badge">Polar · ${esc(w.sport || '')}</span>` : m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}
+      </div>
+      <div class="tiles">${tiles.map(([v, l]) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`).join('')}</div>
+      ${hrHtml}${splitHtml}
+      <div class="row" style="margin-top:16px">
+        ${car ? '' : '<button class="btn" id="detShare">Paylaş</button>'}
+        <button class="btn ghost" id="detDel">Sil</button>
+      </div>`;
+    $('detBack').onclick = closeDetail;
+    $('detDel').onclick = () => {
+      if (!confirm(car ? 'Bu araç yolu silinsin mi?' : 'Bu yürüyüş silinsin mi?')) return;
+      walks = walks.filter((x) => x.id !== w.id);
+      markDeleted(w.id);
+      saveWalks(); buildIndex(); syncSoon();
+      if (!walks.some((x) => dayKey(x.start) === openDay)) openDay = null;
+      closeDetail();
+    };
+    if ($('detShare')) $('detShare').onclick = () => shareWalk(w);
+    if ($('hrChart')) drawLine($('hrChart'), w.hr.s);
+    // Haritada bu yürüyüş: başlangıç, bitiş, kilometre işaretleri
+    dayLayer.clearLayers();
+    L.polyline(w.segs, routeStyle(w, true)).addTo(dayLayer);
+    const pts = w.segs.flat();
+    const dotIcon = (bg, txt) => L.divIcon({ className: '', iconSize: [22, 22], html: `<div class="pin" style="background:${bg}">${txt}</div>` });
+    L.marker(pts[0], { icon: dotIcon('#16a34a', ''), interactive: false }).addTo(dayLayer);
+    L.marker(pts[pts.length - 1], { icon: dotIcon('#111827', '🏁'), interactive: false }).addTo(dayLayer);
+    if (!car) for (const k of kmMarks(w)) L.marker(k.ll, { icon: L.divIcon({ className: '', iconSize: [24, 24], html: `<div class="kmpin">${k.km}</div>` }), interactive: false }).addTo(dayLayer);
+    p.scrollTop = 0;
+    map.fitBounds(L.latLngBounds(pts), panelPad());
+  }
+  function closeDetail() {
+    detailId = null;
+    $('p-detail').hidden = true;
+    if (tab === 'daily') { $('p-daily').hidden = false; renderDaily(); drawDay(); }
+  }
+
+  // ---------- Paylaşım kartı (görsel) ----------
+  async function shareWalk(w) {
+    const W = 1080, H = 1350, c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    const bg = g.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#0f766e'); bg.addColorStop(1, '#0b3b38');
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    const font = (wt, px) => `${wt} ${px}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    g.fillStyle = 'rgba(255,255,255,.75)'; g.font = font(600, 36);
+    g.fillText(new Date(w.start).toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), 80, 120);
+    g.fillStyle = '#fff'; g.font = font(800, 64);
+    g.fillText(w.place ? w.place.split(',')[0] : (w.source === 'polar' ? (w.sport || 'Antrenman') : 'Yürüyüş'), 80, 200);
+    // Rota (Web Mercator, kutuya sığdır)
+    const merc = ([la, ln]) => [ln, -Math.log(Math.tan(Math.PI / 4 + la * Math.PI / 360)) * 180 / Math.PI];
+    const pts = w.segs.map((s) => s.map(merc));
+    const all = pts.flat(), xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
+    const bx = [80, 270, W - 160, 720], minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const k = Math.min(bx[2] / Math.max(1e-9, maxX - minX), bx[3] / Math.max(1e-9, maxY - minY));
+    const ox = bx[0] + (bx[2] - (maxX - minX) * k) / 2, oy = bx[1] + (bx[3] - (maxY - minY) * k) / 2;
+    const P = ([x, y]) => [ox + (x - minX) * k, oy + (y - minY) * k];
+    g.fillStyle = 'rgba(255,255,255,.07)';
+    g.beginPath(); g.roundRect(bx[0] - 20, bx[1] - 20, bx[2] + 40, bx[3] + 40, 40); g.fill();
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const [col, wd] of [['rgba(0,0,0,.25)', 26], ['#ffffff', 16]]) {
+      g.strokeStyle = col; g.lineWidth = wd;
+      for (const s of pts) { g.beginPath(); s.forEach((p, i) => { const [x, y] = P(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }
+    }
+    const dot = (p, col) => { const [x, y] = P(p); g.fillStyle = '#fff'; g.beginPath(); g.arc(x, y, 22, 0, 7); g.fill(); g.fillStyle = col; g.beginPath(); g.arc(x, y, 14, 0, 7); g.fill(); };
+    dot(all[0], '#22c55e'); dot(all[all.length - 1], '#111827');
+    // İstatistikler
+    const stats = [[fmtKm(w.dist), 'km'], [fmtDur(w.dur), 'süre'], [fmtPace(w.dur, w.dist), 'dk/km']];
+    if (w.hr) stats.push([String(w.hr.avg), 'ort. nabız']);
+    const colW = (W - 160) / stats.length;
+    stats.forEach(([v, l], i) => {
+      const x = 80 + i * colW;
+      g.fillStyle = '#fff'; g.font = font(800, stats.length > 3 ? 64 : 76); g.fillText(v, x, 1150);
+      g.fillStyle = 'rgba(255,255,255,.7)'; g.font = font(600, 32); g.fillText(l, x, 1200);
+    });
+    g.fillStyle = 'rgba(255,255,255,.9)'; g.font = font(800, 40); g.textAlign = 'right'; g.fillText('İzim', W - 80, H - 70);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    const file = new File([blob], `izim-${dayKey(w.start)}.png`, { type: 'image/png' });
+    const text = `${fmtKm(w.dist)} km yürüdüm 🚶 (${fmtDur(w.dur)})`;
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text }); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    note('Paylaşım desteklenmiyor; görsel indirildi.');
+  }
+
+  // ---------- Mahalle keşif yüzdesi (OpenStreetMap sınırları) ----------
+  const KEY_AREAS = 'izim.areas.v1';
+  let areas = store.get(KEY_AREAS, {}); // anahtar -> { name, sub, bbox, polys, total }
+  const areaLayer = L.layerGroup().addTo(map);
+  let areaBusy = false, areaTried = new Set();
+
+  function pipRing(pt, ring) {
+    let c = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  }
+  // polys: [[outer, ...holes], ...] — koordinatlar [lng, lat]
+  const inArea = (ar, lng, lat) => lng >= ar.bbox[0] && lng <= ar.bbox[2] && lat >= ar.bbox[1] && lat <= ar.bbox[3] &&
+    ar.polys.some(([outer, ...holes]) => pipRing([lng, lat], outer) && !holes.some((h) => pipRing([lng, lat], h)));
+
+  function areaTotal(ar) {
+    const [x0, y0] = cellXY(ar.bbox[3], ar.bbox[0]), [x1, y1] = cellXY(ar.bbox[1], ar.bbox[2]);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 400000) return 0; // çok büyük bölge (ilçe/il) — sayma
+    let n = 0;
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+      const c = cellCenter(x, y);
+      if (inArea(ar, c.lng, c.lat)) n++;
+    }
+    return n;
+  }
+  function areaSeen(ar) {
+    let n = 0;
+    for (const c of cells.values()) { const ll = cellCenter(c.x, c.y); if (inArea(ar, ll.lng, ll.lat)) n++; }
+    return n;
+  }
+
+  async function fetchArea(lat, lng) {
+    // Önce mahalle düzeyi, olmazsa bir üst düzey
+    for (const zoom of [14, 13, 12]) {
+      await (geoQueue = geoQueue.then(() => new Promise((r) => setTimeout(r, 1100))));
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=${zoom}&polygon_geojson=1&polygon_threshold=0.00003&accept-language=tr&lat=${lat}&lon=${lng}`);
+        if (!res.ok) return null;
+        const j = await res.json();
+        const gj = j.geojson;
+        if (!gj || (gj.type !== 'Polygon' && gj.type !== 'MultiPolygon')) continue;
+        const polys = gj.type === 'Polygon' ? [gj.coordinates] : gj.coordinates;
+        const bb = j.boundingbox.map(Number); // [güney, kuzey, batı, doğu]
+        const ad = j.address || {};
+        const ar = {
+          name: j.name || ad.suburb || ad.neighbourhood || ad.quarter || 'Bölge',
+          sub: ad.town || ad.city_district || ad.county || ad.city || '',
+          bbox: [bb[2], bb[0], bb[3], bb[1]],
+          polys: polys.map((p) => p.map((r) => r.map(([x, y]) => [+x.toFixed(6), +y.toFixed(6)]))),
+        };
+        ar.total = areaTotal(ar);
+        if (!ar.total) continue;
+        return { key: `${j.osm_type}${j.osm_id}`, ar };
+      } catch { return null; }
+    }
+    return null;
+  }
+
+  // Gezilen yerlerin hangi mahallelerde olduğunu bul (en çok gezilen 10 bölge)
+  async function discoverAreas() {
+    if (areaBusy || !cells.size) return;
+    areaBusy = true;
+    const groups = new Map();
+    for (const c of cells.values()) {
+      const k = (c.x >> 4) + ',' + (c.y >> 4); // ~1 km'lik öbekler
+      const g = groups.get(k) || { n: 0, x: 0, y: 0 };
+      g.n++; g.x += c.x; g.y += c.y; groups.set(k, g);
+    }
+    const tops = [...groups.entries()].sort((p, q) => q[1].n - p[1].n).slice(0, 10);
+    for (const [k, g] of tops) {
+      if (areaTried.has(k)) continue;
+      const ll = cellCenter(Math.round(g.x / g.n), Math.round(g.y / g.n));
+      if (Object.values(areas).some((ar) => inArea(ar, ll.lng, ll.lat))) continue;
+      areaTried.add(k);
+      const r = await fetchArea(ll.lat, ll.lng);
+      if (r) { areas[r.key] = r.ar; store.set(KEY_AREAS, areas); if (tab === 'explore') renderAreas(); }
+    }
+    areaBusy = false;
+  }
+
+  function renderAreas() {
+    const box = $('areas');
+    if (!box) return;
+    const list = Object.entries(areas).map(([k, ar]) => ({ k, ar, seen: areaSeen(ar) }))
+      .filter((x) => x.seen > 0).sort((p, q) => q.seen / q.ar.total - p.seen / p.ar.total);
+    if (!list.length) {
+      box.innerHTML = `<div class="empty">${cells.size ? 'Mahalle sınırları alınıyor…' : 'Yürüdükçe mahallelerin yüzde kaçını gezdiğini burada göreceksin.'}</div>`;
+      return;
+    }
+    box.innerHTML = list.map(({ k, ar, seen }) => {
+      const pct = Math.min(100, seen / ar.total * 100);
+      return `<div class="area" data-k="${esc(k)}"><div class="area-l"><b>${esc(ar.name)}</b><small class="muted">${esc(ar.sub)}</small></div>
+        <div class="area-r"><b>%${pct < 1 ? '<1' : Math.round(pct)}</b><span class="bar"><i style="width:${Math.max(2, pct).toFixed(0)}%"></i></span></div></div>`;
+    }).join('');
+    box.querySelectorAll('.area').forEach((el) => (el.onclick = () => showArea(el.dataset.k)));
+  }
+  function showArea(k) {
+    const ar = areas[k];
+    if (!ar) return;
+    areaLayer.clearLayers();
+    const shape = L.polygon(ar.polys.map((p) => p.map((r) => r.map(([x, y]) => [y, x]))), { color: '#0f766e', weight: 2.5, fill: false, dashArray: '6 6', interactive: false }).addTo(areaLayer);
+    map.fitBounds(shape.getBounds(), panelPad());
   }
 
   // ---------- Yedek ----------
@@ -1216,6 +1566,7 @@
     tab = t;
     document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     ['walk', 'explore', 'daily', 'settings'].forEach((n) => ($('p-' + n).hidden = n !== t));
+    $('p-detail').hidden = true; detailId = null;
     if (t === 'settings') { renderAccount(); renderPolar(); }
     map.closePopup();
 
@@ -1223,8 +1574,10 @@
     else { map.removeLayer(dayLayer); map.addLayer(fog); }
     applyMode();
 
+    if (t !== 'explore') areaLayer.clearLayers();
     if (t === 'explore') {
       renderExplore();
+      renderAreas(); discoverAreas();
       const all = [...cells.values()].map((c) => cellCenter(c.x, c.y));
       if (all.length) map.fitBounds(L.latLngBounds(all), { ...panelPad(), maxZoom: 16 });
     }
@@ -1240,6 +1593,13 @@
   $('bStop').onclick = stop;
   $('bHr').onclick = hrConnect;
   document.querySelectorAll('.seg [data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+  document.querySelectorAll('#typeSeg [data-type]').forEach((b) => (b.onclick = () => { startType = b.dataset.type; renderButtons(); }));
+  const renderCarSeg = () => document.querySelectorAll('#carSeg [data-car]').forEach((b) => b.classList.toggle('on', (b.dataset.car === '1') === showCar));
+  document.querySelectorAll('#carSeg [data-car]').forEach((b) => (b.onclick = () => {
+    showCar = b.dataset.car === '1'; store.set(KEY_SHOWCAR, showCar); renderCarSeg();
+    drawRoutes(); updateGlFog(true); applyMode();
+  }));
+  renderCarSeg();
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   $('bExport').onclick = exportData;
   $('bImport').onclick = () => $('fileIn').click();

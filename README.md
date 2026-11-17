@@ -6,6 +6,10 @@ Yürüdüğün yolları haritaya çizer ve kaydeder. Sonra **Haritam** sekmesini
 - **Keşif:** Harita sisle kaplı; yürüdüğün yerler açılır. Renk koyulaştıkça oradan daha çok geçmişsin demektir. Bir yere dokununca kaç kez geçtiğini, kaç farklı günde geldiğini, ilk/son ziyareti gösterir. Keşfedilen alan (km²) ve en çok gittiğin yerler listelenir.
 - **Harita modları (Ayarlar → Harita):** *Normal* — harita tamamen açık, yollar çizgi. *Keşif* — kara ve göller sisle kapalı, deniz açık; yürüdükçe harita açılır.
 - **Nabız ve form (Günlük):** son 30 günün ortalama nabzı, hızı ve *kalp verimliliği* (bir atışta kaç metre) önceki 30 günle karşılaştırılır; 8 haftalık grafik. Yürüyüş ve koşu ayrı değerlendirilir.
+- **Yürüyüş detayı:** Günlük'te bir yürüyüşe dokun: haritada rota ve km işaretleri, nabız grafiği, kilometre tempoları, paylaş/sil.
+- **Paylaşım kartı:** yürüyüşü görsel olarak WhatsApp vb. ile paylaş (desteklenmezse görsel indirilir).
+- **Mahalleler (Keşif):** gezdiğin mahallelerin yüzde kaçını gezdiğin (OpenStreetMap sınırları).
+- **Araç modu:** kayda başlamadan "🚗 Araç" seç. Araç yolları mor kesikli çizgi; keşif sisini açar ama yürüyüş istatistiklerine karışmaz. Ayarlar → Harita'dan gizlenebilir.
 - **Tur sayma:** Aynı noktaya farklı bir yoldan dönmek bir tur sayılır (parkın etrafında 3 kez dönmek = 3 tur). Aynı yoldan geri dönmek tur sayılmaz.
 - **Günlük:** Bu hafta / bu ay / toplam km, seri (art arda yürünen gün), son 14 günün grafiği ve gün gün özet: nerede yürüdün (mahalle adı), kaç km, kaç yeni nokta keşfettin. Bir güne dokununca o günün rotaları haritada görünür.
 - **Yedekle / Geri yükle:** Kayıtları JSON dosyası olarak indir veya başka cihaza aktar.

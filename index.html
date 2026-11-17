@@ -117,6 +117,30 @@
   .seg button.on { background:var(--solid); color:var(--text); box-shadow:0 1px 4px rgba(0,0,0,.12); }
   .tile .delta { display:block; color:var(--muted); font-size:11.5px; margin-top:2px; }
   .verdict { margin:10px 0 0; font-size:14px; line-height:1.45; }
+  .walk { cursor:pointer; }
+  .chev { color:var(--muted); font-size:22px; padding-left:6px; }
+  .det-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .det-head .meta { flex:1; min-width:0; }
+  .det-head .meta b { display:block; font-size:17px; }
+  .det-head .meta small { color:var(--muted); }
+  .icon-btn { width:38px; height:38px; border-radius:50%; border:0; background:var(--soft); font-size:24px; line-height:1; cursor:pointer; flex:none; }
+  #p-detail .tiles { grid-template-columns:repeat(3,1fr); }
+  #p-detail .tile b { font-size:18px; }
+  .splits { display:flex; flex-direction:column; gap:6px; }
+  .split { display:grid; grid-template-columns:44px 1fr 64px; align-items:center; gap:8px; font-size:13.5px; }
+  .split .k { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .split .v { text-align:right; font-weight:650; font-variant-numeric:tabular-nums; }
+  .bar { display:block; height:8px; border-radius:999px; background:var(--soft); overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:999px; background:var(--accent); }
+  .split .bar { height:10px; background:transparent; }
+  .area { display:flex; align-items:center; gap:12px; padding:9px 2px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .area:last-child { border-bottom:0; }
+  .area-l { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .area-l b { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .area-r { width:110px; text-align:right; }
+  .area-r .bar { margin-top:4px; }
+  .pin { width:22px; height:22px; border-radius:50%; border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.35); display:grid; place-items:center; font-size:11px; }
+  .kmpin { width:24px; height:24px; border-radius:50%; background:#fff; color:#0f766e; border:2px solid #0f766e; font:700 11px system-ui; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.25); }
   /* Ayarlar */
   .card { background:var(--soft); border-radius:18px; padding:14px; }
   .card.list { padding:4px 0; }
@@ -158,9 +182,10 @@
   <div class="stats">
     <div><b id="sDist">0,00</b><span>km</span></div>
     <div><b id="sTime">00:00</b><span>süre</span></div>
-    <div><b id="sPace">–</b><span>dk/km</span></div>
+    <div><b id="sPace">–</b><span id="sPaceLbl">dk/km</span></div>
   </div>
   <div class="live-extra" id="liveExtra"></div>
+  <div class="seg" id="typeSeg" style="margin:0 0 10px"><button data-type="yuruyus" class="on">🚶 Yürüyüş</button><button data-type="arac">🚗 Araç</button></div>
   <div class="hr-wrap"><button class="chip" id="bHr">♥ Nabız bağla</button></div>
   <div class="row">
     <button class="btn" id="bStart"><svg class="i" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>Yürüyüşe başla</button>
@@ -171,7 +196,7 @@
 </div>
 
 <!-- Keşif -->
-<div class="panel" id="p-explore" hidden>
+<div class="panel tall" id="p-explore" hidden>
   <div class="seg" style="margin-bottom:12px"><button data-mode="normal">Normal harita</button><button data-mode="kesif">Keşif (sis)</button></div>
   <div class="tiles">
     <div class="tile"><b id="eArea">0</b><span>km² keşif</span></div>
@@ -179,6 +204,8 @@
     <div class="tile"><b id="eView">–</b><span>bu ekranın</span></div>
   </div>
   <div class="legend" id="legend"></div>
+  <h3>Mahalleler</h3>
+  <div id="areas"></div>
   <h3>En çok gittiğin yerler</h3>
   <div id="hots"></div>
   <div class="muted" style="margin-top:6px;text-align:center">Haritada bir yere dokun: oradan kaç kez geçtiğini gör.</div>
@@ -200,6 +227,9 @@
   <div id="days"></div>
 </div>
 
+<!-- Yürüyüş detayı -->
+<div class="panel tall" id="p-detail" hidden></div>
+
 <!-- Ayarlar -->
 <div class="panel tall" id="p-settings" hidden>
   <div class="panel-title">Ayarlar</div>
@@ -212,6 +242,11 @@
     <div class="seg"><button data-mode="normal">Normal</button><button data-mode="kesif">Keşif (sis)</button></div>
     <p class="muted" style="margin:10px 0 0"><b>Normal:</b> harita tamamen açık, yürüdüğün yollar çizgi olarak görünür.<br>
       <b>Keşif:</b> kara ve göller kapalı, deniz açık. Yürüdükçe harita açılır.</p>
+  </div>
+  <div class="card" style="margin-top:8px">
+    <div style="font-weight:650;margin-bottom:8px">🚗 Araçla gidilen yollar</div>
+    <div class="seg" id="carSeg"><button data-car="1">Göster</button><button data-car="0">Gizle</button></div>
+    <p class="muted" style="margin:10px 0 0">Araç kayıtları haritada mor kesikli çizgiyle görünür ve keşif sisini açar. Yürüyüş istatistiklerine karışmaz.</p>
   </div>
   <div class="sec-title">Yedekleme</div>
   <div class="card list">
@@ -243,8 +278,8 @@
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.89.0/dist/umd/supabase.js"></script>
-<script src="mapstyle.js?v=11"></script>
-<script src="fog.js?v=11"></script>
-<script src="app.js?v=11"></script>
+<script src="mapstyle.js?v=12"></script>
+<script src="fog.js?v=12"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>
