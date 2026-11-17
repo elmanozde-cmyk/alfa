@@ -1,5 +1,5 @@
 // Uygulama dosyalarını önbelleğe alır; internet zayıfken de açılır.
-const CACHE = 'izim-v1';
+const CACHE = 'izim-v2';
 const ASSETS = [
   './', './index.html', './app.js', './manifest.webmanifest', './icon.svg',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',

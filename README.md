@@ -2,9 +2,12 @@
 
 Yürüdüğün yolları haritaya çizer ve kaydeder. Sonra **Haritam** sekmesini açınca gezdiğin tüm yerler üst üste görünür.
 
-- **Yürüyüş:** Başla → yürü → Bitir ve kaydet. Mesafe, süre ve tempo (dk/km) canlı gösterilir. Duraklat/devam desteklenir.
-- **Haritam:** Kaydedilen bütün yürüyüşler farklı renklerde. Birine dokununca o yürüyüşe yakınlaşır.
+- **Yürüyüş:** Başla → yürü → Bitir ve kaydet. Mesafe, süre, tempo (dk/km), yeni keşfedilen nokta ve tur sayısı canlı gösterilir. Duraklat/devam desteklenir.
+- **Keşif:** Harita sisle kaplı; yürüdüğün yerler açılır. Renk koyulaştıkça oradan daha çok geçmişsin demektir. Bir yere dokununca kaç kez geçtiğini, kaç farklı günde geldiğini, ilk/son ziyareti gösterir. Keşfedilen alan (km²) ve en çok gittiğin yerler listelenir.
+- **Tur sayma:** Aynı noktaya farklı bir yoldan dönmek bir tur sayılır (parkın etrafında 3 kez dönmek = 3 tur). Aynı yoldan geri dönmek tur sayılmaz.
+- **Günlük:** Bu hafta / bu ay / toplam km, seri (art arda yürünen gün), son 14 günün grafiği ve gün gün özet: nerede yürüdün (mahalle adı), kaç km, kaç yeni nokta keşfettin. Bir güne dokununca o günün rotaları haritada görünür.
 - **Yedekle / Geri yükle:** Kayıtları JSON dosyası olarak indir veya başka cihaza aktar.
+- Mahalle adları OpenStreetMap (Nominatim) üzerinden alınır.
 - Veriler sadece telefonda (tarayıcı hafızasında) tutulur, sunucuya gitmez.
 - Sayfa yanlışlıkla kapanırsa yarım kalan yürüyüş kaybolmaz, açınca devam eder.
 
