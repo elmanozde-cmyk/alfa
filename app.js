@@ -340,7 +340,64 @@
     if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
     if (cur && liveLaps) parts.push(`<b>${liveLaps}</b> tur`);
     $('liveExtra').innerHTML = parts.join(' · ');
+    renderHr();
   }
+  // ---------- Nabız (Bluetooth, standart nabız servisi) ----------
+  let hrDev = null, hrNow = null, hrLast = 0;
+  function renderHr() {
+    const b = $('bHr');
+    if (!hrDev) { b.innerHTML = '♥ Nabız bağla'; b.classList.remove('on'); return; }
+    b.classList.add('on');
+    const fresh = hrNow && Date.now() - hrLast < 10000;
+    b.innerHTML = fresh ? `♥ <b>${hrNow}</b> bpm` : '♥ nabız bekleniyor…';
+  }
+  function onHr(e) {
+    const v = e.target.value, flags = v.getUint8(0);
+    const bpm = flags & 1 ? v.getUint16(1, true) : v.getUint8(1);
+    if (!bpm) return;
+    hrNow = bpm; hrLast = Date.now();
+    if (recording()) {
+      const h = cur.hr || (cur.hr = { sum: 0, n: 0, max: 0, s: [] });
+      h.sum += bpm; h.n++; h.max = Math.max(h.max, bpm);
+      const t = Math.round(elapsed() / 1000);
+      if (!h.s.length || t - h.s[h.s.length - 1][0] >= 10) h.s.push([t, bpm]);
+    }
+    renderHr();
+  }
+  async function hrAttach(dev) {
+    const server = await dev.gatt.connect();
+    const service = await server.getPrimaryService('heart_rate');
+    const ch = await service.getCharacteristic('heart_rate_measurement');
+    ch.addEventListener('characteristicvaluechanged', onHr);
+    await ch.startNotifications();
+  }
+  async function hrConnect() {
+    if (hrDev) {
+      if (!confirm('Nabız cihazının bağlantısı kesilsin mi?')) return;
+      const d = hrDev; hrDev = null; hrNow = null;
+      try { d.gatt.disconnect(); } catch {}
+      renderHr(); return;
+    }
+    if (!navigator.bluetooth) {
+      alert('Bu tarayıcı Bluetooth ile nabız bağlantısını desteklemiyor.\n\nAndroid telefonda Chrome ile açman gerekiyor (iPhone desteklemiyor).');
+      return;
+    }
+    try {
+      const dev = await navigator.bluetooth.requestDevice({ filters: [{ services: ['heart_rate'] }] });
+      hrDev = dev; renderHr();
+      dev.addEventListener('gattserverdisconnected', () => {
+        if (hrDev !== dev) return;
+        hrNow = null; renderHr();
+        setTimeout(() => { if (hrDev === dev) hrAttach(dev).catch(() => {}); }, 2000); // bağlantı koparsa tekrar dene
+      });
+      await hrAttach(dev);
+      note(`${dev.name || 'Nabız cihazı'} bağlandı.`);
+    } catch (e) {
+      hrDev = null; renderHr();
+      if (!e || e.name !== 'NotFoundError') note('Nabız cihazına bağlanılamadı. Cihazda nabız yayınının açık olduğundan emin ol.', true);
+    }
+  }
+
   function renderButtons() {
     $('bStart').hidden = !!cur;
     $('bPause').hidden = !cur;
@@ -445,6 +502,7 @@
         dist: Math.round(cur.dist), dur: cur.activeMs,
         segs: segs.map((s) => s.map((p) => [p[0], p[1]])),
       };
+      if (cur.hr && cur.hr.n) w.hr = { avg: Math.round(cur.hr.sum / cur.hr.n), max: cur.hr.max, s: cur.hr.s };
       walks.unshift(w);
       saveWalks(); syncSoon();
       buildIndex();
@@ -631,7 +689,8 @@
           const row = document.createElement('div');
           row.className = 'walk';
           row.innerHTML = `<div class="meta"><div><b>${fmtClock(w.start)}</b> · ${fmtKm(w.dist)} km · ${fmtDur(w.dur)} · ${fmtPace(w.dur, w.dist)} dk/km
-              ${m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}</div>
+              ${m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}${w.source === 'polar' ? `<span class="badge">Polar · ${esc(w.sport || 'antrenman')}</span>` : ''}</div>
+              ${w.hr ? `<small style="color:#be123c">♥ ort ${w.hr.avg} · en yüksek ${w.hr.max} bpm</small><br>` : ''}
               <small>${esc(w.place || '')}${m.fresh ? `${w.place ? ' · ' : ''}${m.fresh} yeni nokta` : ''}</small></div>
             <button title="Sil" aria-label="Sil">✕</button>`;
           row.querySelector('button').onclick = () => {
@@ -856,6 +915,121 @@
     $('accForm').onsubmit = (e) => { e.preventDefault(); sendLink($('accEmail').value.trim(), e.target.querySelector('button')); };
   }
 
+  // ---------- Polar (saatle kaydedilen rotaları al) ----------
+  const POLAR_CLIENT_ID = 'f8fad51a-0852-4b12-b466-cea873bd086d';
+  const POLAR_REDIRECT = SB_URL + '/functions/v1/polar-callback';
+  const KEY_POLAR_STATE = 'izim.polarState.v1';
+  const KEY_POLAR_AUTO = 'izim.polarAuto.v1';
+  const polar = { linked: null, last: null, busy: false, msg: '' };
+  const polarUrl = (() => {
+    const q = new URLSearchParams(location.search);
+    return { code: q.get('polar_code'), state: q.get('polar_state'), error: q.get('polar_error'), used: false };
+  })();
+  if (polarUrl.code || polarUrl.error) { try { history.replaceState(null, '', location.pathname); } catch {} }
+
+  async function polarCall(action, extra) {
+    const { data, error } = await sb.functions.invoke('polar', { body: { action, ...(extra || {}) } });
+    if (error) {
+      let detail = '';
+      try { detail = (await error.context.json()).error; } catch {}
+      throw new Error(detail || error.message || 'bilinmeyen');
+    }
+    return data;
+  }
+  function polarErr(m) {
+    return {
+      missing_secret: 'Supabase\'de Polar gizli anahtarı bulunamadı. Adı POLAR_CLIENT_SECRET olmalı.',
+      token_failed: 'Polar izni doğrulanamadı. Tekrar bağlamayı dene.',
+      register_failed: 'Polar kaydı yapılamadı. Biraz sonra tekrar dene.',
+      polar_unauthorized: 'Polar bağlantısının yetkisi kalkmış. Bağlantıyı kaldırıp yeniden bağla.',
+      not_signed_in: 'Önce giriş yapmalısın.',
+    }[m] || (/Failed to send|fetch/i.test(m) ? 'Polar sunucu fonksiyonuna ulaşılamadı. Fonksiyon yayınlanmış mı?' : 'Polar hatası: ' + m);
+  }
+  async function polarStatus() {
+    if (!sb || !user) return;
+    let data = null, error = null;
+    try { ({ data, error } = await sb.from('polar_links').select('polar_user_id,last_sync').maybeSingle()); }
+    catch (e) { error = e; }
+    if (error) {
+      polar.linked = false;
+      polar.msg = /polar_links|schema cache|does not exist/i.test(String(error.message)) ? 'Polar tablosu henüz kurulmamış (supabase/polar.sql).' : '';
+    } else {
+      polar.linked = !!data; polar.last = data ? data.last_sync : null;
+    }
+    renderPolar();
+  }
+  async function polarSync(manual) {
+    if (!user || polar.busy) return;
+    polar.busy = true; polar.msg = 'Polar\'dan antrenmanlar çekiliyor…'; renderPolar();
+    try {
+      const r = await polarCall('sync');
+      if (r.linked === false) { polar.linked = false; polar.msg = ''; }
+      else {
+        polar.last = new Date().toISOString();
+        polar.msg = r.imported ? `${r.imported} yeni rota eklendi.` : (manual ? 'Yeni rotalı antrenman yok.' : '');
+        store.set(KEY_POLAR_AUTO, Date.now());
+        if (r.imported) await sync();
+      }
+    } catch (e) { polar.msg = polarErr(e.message); }
+    polar.busy = false; renderPolar();
+  }
+  function polarConnect() {
+    const st = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    store.set(KEY_POLAR_STATE, st);
+    const u = new URL('https://flow.polar.com/oauth2/authorization');
+    u.searchParams.set('response_type', 'code');
+    u.searchParams.set('client_id', POLAR_CLIENT_ID);
+    u.searchParams.set('redirect_uri', POLAR_REDIRECT);
+    u.searchParams.set('state', st);
+    location.href = u.toString();
+  }
+  async function polarFinish() {
+    if (polarUrl.used) return;
+    polarUrl.used = true;
+    const expected = store.get(KEY_POLAR_STATE, null);
+    store.del(KEY_POLAR_STATE);
+    if (polarUrl.error) { polar.msg = 'Polar izni verilmedi.'; renderPolar(); return; }
+    if (!expected || expected !== polarUrl.state) { polar.msg = 'Polar bağlantısı doğrulanamadı, tekrar dene.'; renderPolar(); return; }
+    polar.busy = true; polar.msg = 'Polar bağlanıyor…'; renderPolar();
+    try {
+      const r = await polarCall('connect', { code: polarUrl.code });
+      polar.linked = true; polar.last = new Date().toISOString();
+      polar.msg = 'Polar bağlandı ✓ ' + (r.imported ? `${r.imported} rota eklendi.` : 'Yeni antrenmanların geldikçe eklenecek.');
+      store.set(KEY_POLAR_AUTO, Date.now());
+      if (r.imported) await sync();
+    } catch (e) { polar.msg = polarErr(e.message); }
+    polar.busy = false; renderPolar();
+  }
+  async function polarUnlink() {
+    if (!confirm('Polar bağlantısı kaldırılsın mı? Daha önce gelen rotalar kalır.')) return;
+    polar.busy = true; renderPolar();
+    try { await polarCall('unlink'); polar.linked = false; polar.msg = 'Polar bağlantısı kaldırıldı.'; }
+    catch (e) { polar.msg = polarErr(e.message); }
+    polar.busy = false; renderPolar();
+  }
+  function renderPolar() {
+    const box = $('polarBox');
+    if (!box) return;
+    const msg = polar.msg ? `<p class="muted" style="margin:8px 0 0">${esc(polar.msg)}</p>` : '';
+    const head = (t, s, ok) => `<div class="acc-head"><div class="avatar" style="background:${ok ? '#d6001c' : 'var(--muted)'}">P</div>
+      <div class="meta"><b>${t}</b><span class="muted">${s}</span></div></div>`;
+    if (!sb || !user) { box.innerHTML = head('Polar bağlı değil', 'Bağlamak için önce yukarıdan giriş yap', false) + msg; return; }
+    if (polar.linked === null) { box.innerHTML = head('Polar', 'Durum kontrol ediliyor…', false) + msg; return; }
+    const dis = polar.busy ? ' disabled' : '';
+    if (!polar.linked) {
+      box.innerHTML = head('Polar bağlı değil', 'Saatinle kaydettiğin rotalar otomatik gelsin', false) + msg +
+        `<button class="btn small" id="polConnect" style="width:100%;margin-top:10px"${dis}>Polar hesabını bağla</button>`;
+      $('polConnect').onclick = polarConnect;
+      return;
+    }
+    const last = polar.last ? new Date(polar.last).toLocaleString('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'henüz yok';
+    box.innerHTML = head('Polar bağlı ✓', `Son çekme: ${last}`, true) + msg +
+      `<div class="acc-actions"><button class="link" id="polSync"${dis}>Antrenmanları çek</button>
+       <button class="link" id="polUnlink" style="color:var(--muted)"${dis}>Bağlantıyı kaldır</button></div>`;
+    $('polSync').onclick = () => polarSync(true);
+    $('polUnlink').onclick = polarUnlink;
+  }
+
   if (sb) {
     sb.auth.onAuthStateChange((event, session) => {
       const was = user && user.id;
@@ -864,7 +1038,16 @@
       if (user && pending) { pending = null; store.del(KEY_PENDING); }
       if (user && !was && urlInfo.login) { authNotice = ''; syncMsg = 'Giriş yapıldı ✓'; setTab('settings'); }
       renderAccount();
-      if (user && user.id !== was) setTimeout(sync, 0);
+      if (!user) { polar.linked = null; renderPolar(); }
+      if (user && user.id !== was) setTimeout(async () => {
+        await sync();
+        await polarStatus();
+        if (polarUrl.code || polarUrl.error) { setTab('settings'); polarFinish(); }
+        else if (polar.linked && Date.now() - store.get(KEY_POLAR_AUTO, 0) > 3600e3) polarSync(false);
+      }, 0);
+      if (!user && event === 'INITIAL_SESSION' && (polarUrl.code || polarUrl.error)) {
+        polar.msg = 'Polar\'ı bağlamak için önce giriş yap.'; setTab('settings');
+      }
     });
     window.addEventListener('online', syncSoon);
   }
@@ -875,7 +1058,7 @@
     tab = t;
     document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     ['walk', 'explore', 'daily', 'settings'].forEach((n) => ($('p-' + n).hidden = n !== t));
-    if (t === 'settings') renderAccount();
+    if (t === 'settings') { renderAccount(); renderPolar(); }
     map.closePopup();
 
     if (t === 'daily') { map.removeLayer(fog); map.addLayer(dayLayer); fillPlaces(); renderDaily(); drawDay(); }
@@ -896,6 +1079,7 @@
   $('bStart').onclick = start;
   $('bPause').onclick = togglePause;
   $('bStop').onclick = stop;
+  $('bHr').onclick = hrConnect;
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   $('bExport').onclick = exportData;
   $('bImport').onclick = () => $('fileIn').click();

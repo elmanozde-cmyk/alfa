@@ -16,6 +16,15 @@ Yerelde denemek: `python3 -m http.server` → `http://localhost:8000`.
 
 **Sınır:** Web uygulaması olduğu için ekran kilitlenince veya uygulama arka plana atılınca telefon GPS'i durdurabilir. Uygulama kayıt sırasında ekranı açık tutmaya çalışır. Cep telefonu kilitliyken de kayıt için ileride native (Capacitor/Android) sürüm gerekir.
 
+## Nabız (Bluetooth)
+- Yürüyüş ekranında **♥ Nabız bağla**: standart Bluetooth nabız sinyali yayan cihazlara bağlanır (Polar H10/H9/Verity Sense, "nabız paylaş" modundaki saatler).
+- Android + Chrome gerekir; iPhone tarayıcıları Web Bluetooth desteklemez.
+
+## Polar
+- Ayarlar → Polar → **Polar hesabını bağla**. Saatle kaydedilen rotalı antrenmanlar yürüyüş olarak eklenir.
+- Kurulum: `supabase/polar.sql` (SQL Editor), Supabase secret `POLAR_CLIENT_SECRET`, Polar'da yönlendirme adresi `https://ihvzwkpnhihmbzdvljvf.supabase.co/functions/v1/polar-callback`.
+- Fonksiyonlar (`supabase/functions/`) GitHub Actions ile yayınlanır; repoya `SUPABASE_ACCESS_TOKEN` secret'ı eklenmelidir.
+
 ## Bulut (Supabase)
 - Tablo ve erişim kuralları: `supabase/schema.sql` (Supabase → SQL Editor'de bir kez çalıştırılır).
 - Uygulamada sadece **publishable** anahtar bulunur. `sb_secret_...` anahtarı asla koda konmaz.

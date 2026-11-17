@@ -1,0 +1,8 @@
+project_id = "ihvzwkpnhihmbzdvljvf"
+
+# Oturum kontrolü fonksiyonun içinde yapılıyor; geri dönüş adresi ise oturumsuz çağrılır.
+[functions.polar]
+verify_jwt = false
+
+[functions.polar-callback]
+verify_jwt = false
