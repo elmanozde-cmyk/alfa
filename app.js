@@ -776,6 +776,7 @@
   function start() {
     cur = { start: Date.now(), segs: [[]], dist: 0, activeMs: 0, resumedAt: Date.now(), type: startType };
     bestAcc = Infinity; carHits = 0; carHint = false;
+    $('welcome').hidden = true; store.set('izim.welcomed.v1', 1);
     liveRebuild(); saveCurrent();
     follow = true;
     startWatch(); lockScreen(); startTick(); nativeTrack(true);
@@ -2139,6 +2140,28 @@
     if (cur.resumedAt || cur.autoPaused) nativeTrack(true);
     liveRebuild(); drawLive();
   }
+
+  // ---------- İlk açılış ve kurulum ----------
+  const KEY_WELCOME = 'izim.welcomed.v1';
+  let installEvt = null;
+  const renderInstall = () => {
+    $('bInstall').hidden = !installEvt;
+    $('welcomeInstall').hidden = !installEvt;
+    $('bApk').hidden = NATIVE || !/Android/i.test(navigator.userAgent);
+  };
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; renderInstall(); });
+  window.addEventListener('appinstalled', () => { installEvt = null; renderInstall(); note('İzim ana ekrana eklendi.'); });
+  const doInstall = async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    try { await installEvt.userChoice; } catch {}
+    installEvt = null; renderInstall();
+  };
+  $('bInstall').onclick = doInstall;
+  $('welcomeInstall').onclick = doInstall;
+  $('welcomeOk').onclick = () => { store.set(KEY_WELCOME, 1); $('welcome').hidden = true; };
+  ready.then(() => { if (!store.get(KEY_WELCOME, 0) && !walks.length && !cur) $('welcome').hidden = false; });
+  renderInstall();
 
   if (!NATIVE && 'serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});

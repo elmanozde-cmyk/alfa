@@ -138,3 +138,22 @@ test('Android köprüsü: arka plan servisi kayıtla açılıp kapanır', async 
   assert.deepEqual(p.errors, []);
   await ctx.close();
 });
+
+test('ilk açılış: karşılama kartı, ana ekrana ekle, Android bağlantısı', async () => {
+  const ctx = await newContext(browser, { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36' });
+  const p = await openApp(ctx, server.url);
+  await p.waitForTimeout(200);
+  assert.ok(await p.isVisible('#welcome'), 'yeni kullanıcı karşılama kartını görür');
+  await p.evaluate(() => { const e = new Event('beforeinstallprompt'); e.prompt = () => { window.__prompted = true; }; e.userChoice = Promise.resolve({ outcome: 'accepted' }); window.dispatchEvent(e); });
+  assert.ok(await p.isVisible('#welcomeInstall'));
+  await p.screenshot({ path: path.join(ROOT, 'tests/e2e/.son-karsilama.png') }).catch(() => {});
+  await p.click('#welcomeInstall');
+  assert.equal(await p.evaluate(() => window.__prompted), true);
+  await p.click('#welcomeOk');
+  await p.reload(); await p.evaluate(() => window.izimDebug.ready); await p.waitForTimeout(200);
+  assert.equal(await p.isVisible('#welcome'), false, 'kapatınca bir daha görünmez');
+  await p.click('.nav [data-tab=settings]');
+  assert.ok(await p.isVisible('#bApk'), 'Android telefonda APK bağlantısı görünür');
+  assert.deepEqual(p.errors, []);
+  await ctx.close();
+});
