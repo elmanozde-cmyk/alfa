@@ -51,6 +51,54 @@
   const isCar = (w) => w.type === 'arac';
   const footWalks = () => walks.filter((w) => !isCar(w));
   const visibleWalks = () => (showCar ? walks : footWalks());
+
+  // Antrenman tercihleri
+  const KEY_PREFS = 'izim.prefs.v1';
+  const prefs = Object.assign({ voice: true, autoPause: true, goal: 10, age: null }, store.get(KEY_PREFS, {}));
+  const savePrefs = () => store.set(KEY_PREFS, prefs);
+
+  // Sesli bildirim (telefonun Türkçe sesiyle)
+  function say(text) {
+    if (!prefs.voice || !('speechSynthesis' in window)) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'tr-TR'; u.rate = 1;
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
+  function spokenDur(sec) {
+    sec = Math.round(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    return [h && `${h} saat`, m && `${m} dakika`, !h && s && `${s} saniye`].filter(Boolean).join(' ') || '0 saniye';
+  }
+
+  // Nabız bölgeleri (en yüksek nabız: 208 − 0,7 × yaş)
+  const ZONES = [
+    { n: 1, lo: 0, name: 'Çok hafif', c: '#fecdd3' },
+    { n: 2, lo: 0.6, name: 'Hafif · yağ yakma', c: '#fda4af' },
+    { n: 3, lo: 0.7, name: 'Orta · dayanıklılık', c: '#fb7185' },
+    { n: 4, lo: 0.8, name: 'Zorlu', c: '#e11d48' },
+    { n: 5, lo: 0.9, name: 'En yüksek', c: '#9f1239' },
+  ];
+  const hrMax = () => (prefs.age ? Math.round(208 - 0.7 * prefs.age) : null);
+  function zoneOf(bpm) {
+    const mx = hrMax();
+    if (!mx) return null;
+    const pct = bpm / mx;
+    let z = ZONES[0];
+    for (const zz of ZONES) if (pct >= zz.lo) z = zz;
+    return z;
+  }
+  // Örneklerden her bölgede geçen süre (saniye)
+  function zoneTimes(s) {
+    const out = ZONES.map(() => 0);
+    for (let i = 0; i < s.length; i++) {
+      const dt = i + 1 < s.length ? Math.min(30, s[i + 1][0] - s[i][0]) : 10;
+      const z = zoneOf(s[i][1]);
+      if (z && dt > 0) out[z.n - 1] += dt;
+    }
+    return out;
+  }
   const saveWalks = () => store.set(KEY_WALKS, walks);
 
   // ---------- Yardımcılar ----------
@@ -435,6 +483,7 @@
       else if (lastAcc > MAX_ACCURACY) parts.push(`📡 <b>GPS zayıf</b> (±${Math.round(lastAcc)} m) · açık alana çık`);
       else parts.push(`📡 GPS ${cur ? 'iyi' : 'hazır'} (±${Math.round(lastAcc)} m)`);
     }
+    if (cur && cur.autoPaused) parts.push('⏸ <b>Otomatik duraklatıldı</b> · yürüyünce devam eder');
     if (cur && cur.type === 'arac') parts.push('🚗 Araç kaydı');
     else if (cur) parts.push(`<b>${liveFresh}</b> yeni nokta`);
     if (carHint && cur && cur.type !== 'arac') parts.push('<br>🚗 <b>Araçta gibisin.</b> Bitir, sonra Araç seçip yeniden başlat.');
@@ -449,7 +498,9 @@
     if (!hrDev) { b.innerHTML = '♥ Nabız bağla'; b.classList.remove('on'); return; }
     b.classList.add('on');
     const fresh = hrNow && Date.now() - hrLast < 10000;
-    b.innerHTML = fresh ? `♥ <b>${hrNow}</b> bpm` : '♥ nabız bekleniyor…';
+    const z = fresh ? zoneOf(hrNow) : null;
+    b.innerHTML = fresh ? `♥ <b>${hrNow}</b> bpm${z ? ` · Bölge ${z.n}` : ''}` : '♥ nabız bekleniyor…';
+    b.title = z ? z.name : '';
   }
   function onHr(e) {
     const v = e.target.value, flags = v.getUint8(0);
@@ -500,6 +551,7 @@
 
   function renderButtons() {
     $('typeSeg').hidden = !!cur;
+    renderGoal();
     document.querySelectorAll('#typeSeg [data-type]').forEach((b) => b.classList.toggle('on', b.dataset.type === startType));
     liveLine.setStyle(cur && cur.type === 'arac' ? { color: CAR, dashArray: '10 8' } : { color: ROUTE, dashArray: null });
     $('bStart').hidden = !!cur;
@@ -523,6 +575,14 @@
     } else if (follow && tab === 'walk') map.panTo(lastFix, { animate: true });
 
     lastAcc = accuracy;
+    if (cur && cur.autoPaused) {
+      // Otomatik duraklatmadan çık: son noktadan 12 m uzaklaşınca
+      const s = cur.segs[cur.segs.length - 1], ref = s[s.length - 1];
+      if (accuracy <= limits().acc && (!ref || haversine(ref, [lat, lng]) >= 12)) {
+        cur.autoPaused = false; cur.resumedAt = Date.now(); lastMoveT = Date.now();
+        renderButtons(); say('Devam ediliyor');
+      } else { renderStats(); return; }
+    }
     if (!recording()) { renderStats(); return; }
     bestAcc = Math.min(bestAcc, accuracy);
     const lim = limits();
@@ -541,6 +601,15 @@
       }
       carHits = 0;
       cur.dist += d;
+      lastMoveT = Date.now();
+      // Her kilometrede sesli bildirim
+      const km = Math.floor(cur.dist / 1000);
+      if (cur.type !== 'arac' && km > (cur.lastKm || 0)) {
+        const nowS = elapsed() / 1000, lap = nowS - (cur.lastKmS || 0);
+        cur.lastKm = km; cur.lastKmS = nowS;
+        const hrFresh = hrNow && Date.now() - hrLast < 10000;
+        say(`${km} kilometre. Süre ${spokenDur(nowS)}. Son kilometre ${spokenDur(lap)}.${hrFresh ? ` Nabız ${hrNow}.` : ''}`);
+      }
     }
     const p = [+lat.toFixed(6), +lng.toFixed(6), t];
     seg.push(p);
@@ -568,7 +637,17 @@
   }
   async function lockScreen() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
   function releaseScreen() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
-  function startTick() { clearInterval(tick); tick = setInterval(renderStats, 1000); }
+  let lastMoveT = 0;
+  function autoPauseCheck() {
+    if (!prefs.autoPause || !cur || !cur.resumedAt || cur.autoPaused) return;
+    if (Date.now() - lastMoveT < 20000) return;
+    // 20 sn hareket yok: son hareket anında durdur
+    cur.activeMs += Math.max(0, lastMoveT - cur.resumedAt);
+    cur.resumedAt = null; cur.autoPaused = true;
+    saveCurrent(); renderButtons();
+    say('Otomatik duraklatıldı');
+  }
+  function startTick() { clearInterval(tick); tick = setInterval(() => { autoPauseCheck(); renderStats(); }, 1000); }
   function stopTick() { clearInterval(tick); tick = null; }
 
   function start() {
@@ -578,6 +657,8 @@
     follow = true;
     startWatch(); lockScreen(); startTick();
     drawLive(); renderButtons(); renderStats();
+    lastMoveT = Date.now();
+    say(startType === 'arac' ? 'Araç kaydı başladı' : 'Yürüyüş başladı');
     note('Kayıt başladı. Ekranı açık tut, uygulamayı arka plana atma.');
   }
 
@@ -585,10 +666,11 @@
     if (!cur) return;
     if (recording()) {
       cur.activeMs += Date.now() - cur.resumedAt;
-      cur.resumedAt = null;
+      cur.resumedAt = null; cur.autoPaused = false;
       stopTick(); releaseScreen();
       note('Duraklatıldı.');
     } else {
+      cur.autoPaused = false; lastMoveT = Date.now();
       cur.resumedAt = Date.now();
       if (cur.segs[cur.segs.length - 1].length) cur.segs.push([]);
       startWatch(); lockScreen(); startTick();
@@ -621,6 +703,7 @@
       saveWalks(); syncSoon();
       buildIndex();
       const m = walkMeta.get(w.id);
+      say(`${isCar(w) ? 'Araç kaydı' : 'Yürüyüş'} bitti. ${fmtKm(w.dist)} kilometre, ${spokenDur(w.dur / 1000)}.`);
       if (isCar(w)) note(`🚗 Araç yolu kaydedildi: ${fmtKm(w.dist)} km · ${fmtTime(w.dur)}`);
       else note(`Kaydedildi: ${fmtKm(w.dist)} km · ${fmtTime(w.dur)} · ${m.fresh} yeni nokta${m.laps ? ` · ${m.laps} tur` : ''}`);
       fillPlaces();
@@ -719,7 +802,30 @@
     return n;
   }
 
+  function weekKm() {
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).getTime();
+    return footWalks().filter((w) => w.start >= monday).reduce((s, w) => s + w.dist, 0) / 1000;
+  }
+  function goalRing(size) {
+    const km = weekKm(), goal = prefs.goal || 10, pct = Math.min(1, km / goal);
+    const r = size / 2 - 6, C = 2 * Math.PI * r;
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="Haftalık hedef">
+      <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" style="stroke:var(--text);stroke-opacity:.12" stroke-width="9"/>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" style="stroke:var(--accent)" stroke-width="9" stroke-linecap="round"
+        stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 ${size / 2} ${size / 2})"/>
+      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central" font-size="${size / 4.6}" font-weight="750" style="fill:var(--text)">%${Math.round(pct * 100)}</text></svg>`;
+  }
+  function renderGoal() {
+    const km = weekKm(), goal = prefs.goal || 10, left = Math.max(0, goal - km);
+    if ($('goalCard')) $('goalCard').innerHTML = `${goalRing(78)}<div class="meta"><b>Haftalık hedef</b>
+      <span>${fmtKm(km * 1000, 1)} / ${String(goal).replace('.', ',')} km</span>
+      <small class="muted">${left > 0 ? `Hedefe ${fmtKm(left * 1000, 1)} km kaldı` : '🎉 Bu haftanın hedefi tamam!'}</small></div>`;
+    if ($('goalLine')) $('goalLine').innerHTML = cur ? '' : `<span class="bar"><i style="width:${Math.min(100, km / goal * 100).toFixed(0)}%"></i></span>
+      <small>Bu hafta ${fmtKm(km * 1000, 1)} / ${String(goal).replace('.', ',')} km</small>`;
+  }
   function renderTiles(days) {
+    renderGoal();
     const now = new Date();
     const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).getTime();
     const month = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
@@ -1004,7 +1110,7 @@
       const tt = w.tt[si] || [];
       for (let i = 1; i < s.length; i++) {
         const dd = haversine(s[i - 1], s[i]), dt = (tt[i] ?? 0) - (tt[i - 1] ?? 0);
-        if (dt <= 0 || dd <= 0) { dist += dd; continue; }
+        if (dt <= 0 || dd <= 0 || (dt > 30 && dd / dt < 0.4)) { dist += dd; continue; } // mola
         let d0 = dist, t0 = time;
         while (d0 + dd >= next && dist + dd >= next) {
           const tCross = t0 + dt * (next - dist) / dd;
@@ -1108,6 +1214,18 @@
     const hrHtml = car ? '' : (w.hr && w.hr.s && w.hr.s.length >= 3
       ? '<h3>Nabız</h3><div class="chart" id="hrChart"><div class="tip" hidden></div></div>'
       : `<h3>Nabız</h3><div class="muted">${w.hr ? `Ortalama ${w.hr.avg}, en yüksek ${w.hr.max} bpm. Ayrıntılı nabız grafiği yok.` : 'Bu kayıtta nabız yok. Yürüyüşe başlamadan önce ♥ Nabız bağla.'}</div>`);
+    let zoneHtml = '';
+    if (!car && w.hr && w.hr.s && w.hr.s.length >= 3) {
+      if (!hrMax()) zoneHtml = '<h3>Nabız bölgeleri</h3><div class="muted">Bölgeleri görmek için <b>Ayarlar → Antrenman</b>’dan yaşını gir.</div>';
+      else {
+        const zt = zoneTimes(w.hr.s), tot = zt.reduce((x, y) => x + y, 0) || 1;
+        zoneHtml = `<h3>Nabız bölgeleri <span class="muted" style="text-transform:none;font-weight:500">· en yüksek nabız ${hrMax()}</span></h3>
+          <div class="zbar">${ZONES.map((z, i) => zt[i] ? `<i style="flex:${zt[i]};background:${z.c}" title="Bölge ${z.n}"></i>` : '').join('')}</div>
+          <div class="zlist">${ZONES.map((z, i) => `<div class="zrow"><span class="zdot" style="background:${z.c}"></span>
+            <span class="zn">Bölge ${z.n} · ${z.name}</span><span class="zv">${zt[i] ? spokenDur(zt[i]).replace(/ dakika/, ' dk').replace(/ saniye/, ' sn').replace(/ saat/, ' sa') : '–'}</span>
+            <span class="zp">%${Math.round(zt[i] / tot * 100)}</span></div>`).join('')}</div>`;
+      }
+    }
     p.innerHTML = `<div class="det-head">
         <button class="icon-btn" id="detBack" aria-label="Geri">‹</button>
         <div class="meta"><b>${esc(new Date(w.start).toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' }))}</b>
@@ -1115,7 +1233,7 @@
         ${car ? `<span class="badge" style="background:rgba(124,58,237,.14);color:${CAR}">🚗 Araç</span>` : w.source === 'polar' || w.sport ? `<span class="badge">${esc((w.source === 'polar' ? 'Polar · ' : '') + (w.sport || ''))}</span>` : m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}
       </div>
       <div class="tiles">${tiles.map(([v, l]) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`).join('')}</div>
-      ${hrHtml}${splitHtml}
+      ${hrHtml}${zoneHtml}${splitHtml}
       <div class="row" style="margin-top:16px">
         ${car ? '' : '<button class="btn" id="detShare">Paylaş</button>'}
         <button class="btn ghost" id="detDel">Sil</button>
@@ -1676,6 +1794,19 @@
     drawRoutes(); updateGlFog(true); applyMode();
   }));
   renderCarSeg();
+  const renderPrefs = () => {
+    document.querySelectorAll('[data-pref]').forEach((b) => b.classList.toggle('on', String(prefs[b.dataset.pref]) === b.dataset.val));
+    $('prefGoal').value = prefs.goal || '';
+    $('prefAge').value = prefs.age || '';
+    $('hrMaxInfo').textContent = hrMax() ? `En yüksek nabız tahmini: ${hrMax()} bpm` : 'Nabız bölgeleri için yaşını gir.';
+  };
+  document.querySelectorAll('[data-pref]').forEach((b) => (b.onclick = () => {
+    prefs[b.dataset.pref] = b.dataset.val === 'true'; savePrefs(); renderPrefs();
+    if (b.dataset.pref === 'voice' && prefs.voice) say('Sesli bildirim açık');
+  }));
+  $('prefGoal').onchange = (e) => { const v = parseFloat(String(e.target.value).replace(',', '.')); prefs.goal = v > 0 ? Math.min(500, v) : 10; savePrefs(); renderPrefs(); renderGoal(); };
+  $('prefAge').onchange = (e) => { const v = parseInt(e.target.value, 10); prefs.age = v >= 10 && v <= 100 ? v : null; savePrefs(); renderPrefs(); renderHr(); };
+  renderPrefs();
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   $('bExport').onclick = exportData;
   $('bImport').onclick = () => $('fileIn').click();
@@ -1701,7 +1832,7 @@
       cur.activeMs += Math.max(0, (cur.savedAt || cur.resumedAt) - cur.resumedAt);
       cur.resumedAt = Date.now();
       if (cur.segs[cur.segs.length - 1].length) cur.segs.push([]);
-      saveCurrent(); lockScreen(); startTick();
+      saveCurrent(); lockScreen(); startTick(); lastMoveT = Date.now();
       note('Yarım kalan yürüyüşe devam ediliyor.');
     }
     liveRebuild(); drawLive();

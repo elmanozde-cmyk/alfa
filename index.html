@@ -154,6 +154,29 @@
   .trow .meta { flex:1; min-width:0; display:flex; flex-direction:column; }
   .trow .meta small, .trow .tr small { color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .trow .tr { text-align:right; display:flex; flex-direction:column; }
+  .goal-line { margin:-4px 0 12px; text-align:center; }
+  .goal-line:empty { display:none; }
+  .goal-line .bar { height:6px; max-width:220px; margin:0 auto 4px; }
+  .goal-line small { color:var(--muted); font-size:12px; }
+  .goal-card { display:flex; align-items:center; gap:14px; background:var(--soft); border-radius:18px; padding:10px 14px; margin-bottom:10px; }
+  .goal-card .meta { display:flex; flex-direction:column; }
+  .goal-card .meta span { font-size:20px; font-weight:750; font-variant-numeric:tabular-nums; }
+  .zbar { display:flex; gap:2px; height:14px; border-radius:7px; overflow:hidden; margin-bottom:8px; }
+  .zbar i { display:block; height:100%; }
+  .zlist { display:flex; flex-direction:column; gap:4px; }
+  .zrow { display:grid; grid-template-columns:12px 1fr auto 40px; gap:8px; align-items:center; font-size:13px; }
+  .zdot { width:10px; height:10px; border-radius:3px; }
+  .zv, .zp { text-align:right; font-variant-numeric:tabular-nums; }
+  .zp { color:var(--muted); }
+  .prefs { padding:4px 14px; }
+  .prow { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 0; }
+  .prow + .prow { border-top:1px solid var(--line); }
+  .prow > span { display:flex; flex-direction:column; font-weight:600; }
+  .prow small { color:var(--muted); font-weight:400; font-size:12.5px; }
+  .seg.mini { flex:none; }
+  .seg.mini button { padding:7px 11px; font-size:13px; }
+  .num { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:14px; }
+  .num input { width:70px; border:1px solid var(--line); background:var(--solid); color:var(--text); border-radius:10px; padding:8px; font:inherit; text-align:center; }
   /* Ayarlar */
   .card { background:var(--soft); border-radius:18px; padding:14px; }
   .card.list { padding:4px 0; }
@@ -198,6 +221,7 @@
     <div><b id="sPace">–</b><span id="sPaceLbl">dk/km</span></div>
   </div>
   <div class="live-extra" id="liveExtra"></div>
+  <div class="goal-line" id="goalLine"></div>
   <div class="seg" id="typeSeg" style="margin:0 0 10px"><button data-type="yuruyus" class="on">🚶 Yürüyüş</button><button data-type="arac">🚗 Araç</button></div>
   <div class="hr-wrap"><button class="chip" id="bHr">♥ Nabız bağla</button></div>
   <div class="row">
@@ -229,6 +253,7 @@
   <div class="seg" id="dailySeg" style="margin-bottom:12px"><button data-view="days" class="on">Günler</button><button data-view="list">Antrenmanlar</button></div>
   <div id="viewList" hidden></div>
   <div id="viewDays">
+  <div class="goal-card" id="goalCard"></div>
   <div class="tiles four">
     <div class="tile"><b id="dWeek">0</b><span>bu hafta</span></div>
     <div class="tile"><b id="dMonth">0</b><span>bu ay</span></div>
@@ -254,6 +279,17 @@
   <div class="card account" id="account"></div>
   <div class="sec-title">Polar</div>
   <div class="card account" id="polarBox"></div>
+  <div class="sec-title">Antrenman</div>
+  <div class="card prefs">
+    <div class="prow"><span>🔊 Sesli bildirim<small>Her kilometrede süre, tempo ve nabız</small></span>
+      <div class="seg mini"><button data-pref="voice" data-val="true">Açık</button><button data-pref="voice" data-val="false">Kapalı</button></div></div>
+    <div class="prow"><span>⏸ Otomatik duraklatma<small>Durunca süre durur, yürüyünce devam eder</small></span>
+      <div class="seg mini"><button data-pref="autoPause" data-val="true">Açık</button><button data-pref="autoPause" data-val="false">Kapalı</button></div></div>
+    <div class="prow"><span>🎯 Haftalık hedef<small>Yürüyüş kilometresi</small></span>
+      <label class="num"><input id="prefGoal" type="number" inputmode="decimal" min="1" max="500" step="0.5"> km</label></div>
+    <div class="prow"><span>♥ Yaş<small id="hrMaxInfo">Nabız bölgeleri için</small></span>
+      <label class="num"><input id="prefAge" type="number" inputmode="numeric" min="10" max="100" placeholder="–"></label></div>
+  </div>
   <div class="sec-title">Harita</div>
   <div class="card">
     <div class="seg"><button data-mode="normal">Normal</button><button data-mode="kesif">Keşif (sis)</button></div>
@@ -300,9 +336,9 @@
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.89.0/dist/umd/supabase.js"></script>
-<script src="mapstyle.js?v=13"></script>
-<script src="fog.js?v=13"></script>
-<script src="importer.js?v=13"></script>
-<script src="app.js?v=13"></script>
+<script src="mapstyle.js?v=14"></script>
+<script src="fog.js?v=14"></script>
+<script src="importer.js?v=14"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

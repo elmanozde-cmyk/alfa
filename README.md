@@ -6,6 +6,10 @@ Yürüdüğün yolları haritaya çizer ve kaydeder. Sonra **Haritam** sekmesini
 - **Keşif:** Harita sisle kaplı; yürüdüğün yerler açılır. Renk koyulaştıkça oradan daha çok geçmişsin demektir. Bir yere dokununca kaç kez geçtiğini, kaç farklı günde geldiğini, ilk/son ziyareti gösterir. Keşfedilen alan (km²) ve en çok gittiğin yerler listelenir.
 - **Harita modları (Ayarlar → Harita):** *Normal* — harita tamamen açık, yollar çizgi. *Keşif* — kara ve göller sisle kapalı, deniz açık; yürüdükçe harita açılır.
 - **Nabız ve form (Günlük):** son 30 günün ortalama nabzı, hızı ve *kalp verimliliği* (bir atışta kaç metre) önceki 30 günle karşılaştırılır; 8 haftalık grafik. Yürüyüş ve koşu ayrı değerlendirilir.
+- **Sesli bildirim:** her kilometrede süre, son kilometre ve nabız; başla/duraklat/bitir anonsları (Ayarlar → Antrenman).
+- **Otomatik duraklatma:** 20 sn hareketsiz kalınca süre durur, 12 m yürüyünce devam eder.
+- **Nabız bölgeleri:** yaş girilince (en yüksek nabız ≈ 208 − 0,7 × yaş) canlı bölge ve yürüyüş detayında bölge dağılımı.
+- **Haftalık hedef:** Günlük'te ilerleme halkası, Yürüyüş ekranında ilerleme çubuğu.
 - **Yürüyüş detayı:** Günlük'te bir yürüyüşe dokun: haritada rota ve km işaretleri, nabız grafiği, kilometre tempoları, paylaş/sil.
 - **Antrenmanlar listesi (Günlük → Antrenmanlar):** tüm kayıtlar aylara göre, aylık toplamlarla; yürüyüş/koşu/araç filtresi.
 - **GPX / TCX içe aktarma:** Polar Flow, Strava, Garmin'den indirilen dosyalar (birden çok seçilebilir); nabız ve tempo bilgisi de okunur, aynı antrenman iki kez eklenmez.
