@@ -215,7 +215,7 @@
       placeName(w.segs[0][0][0], w.segs[0][0][1]).then((name) => {
         if (!name) return;
         w.place = name; w._s = false; saveWalks(); syncSoon();
-        if (tab === 'daily') renderDaily();
+        if (tab === 'daily' && !detailId) { if (dailyView === 'list') renderList(); else renderDaily(); }
       });
     });
   }
@@ -787,7 +787,7 @@
   // Kalp verimliliği = bir kalp atışında kaç metre ilerlendiği. Aynı hızda nabız düşerse artar: form gelişiyor demektir.
   const RUN_SPORTS = new Set(['Koşu', 'Arazi koşusu']);
   let formKind = 'yuruyus';
-  const kindOf = (w) => (w.source === 'polar' && RUN_SPORTS.has(w.sport) ? 'kosu' : 'yuruyus');
+  const kindOf = (w) => (RUN_SPORTS.has(w.sport) ? 'kosu' : /Bisiklet/.test(w.sport || '') ? 'diger' : 'yuruyus');
   const hrWalks = (kind) => footWalks().filter((w) => w.hr && w.hr.avg > 40 && w.dur >= 5 * 60000 && w.dist >= 300 && kindOf(w) === kind);
   function hrAgg(ws) {
     if (!ws.length) return null;
@@ -919,6 +919,79 @@
     renderDaily(); drawDay();
   }
 
+  // ---------- Antrenmanlar listesi ----------
+  let dailyView = 'days', listFilter = 'all';
+  const catOf = (w) => (isCar(w) ? 'arac' : kindOf(w));
+  const iconOf = (w) => (isCar(w) ? '🚗' : RUN_SPORTS.has(w.sport) ? '🏃' : /Bisiklet/.test(w.sport || '') ? '🚴' : '🚶');
+  const srcOf = (w) => (w.source === 'polar' ? ' · Polar' : w.source === 'dosya' ? ' · dosya' : '');
+
+  function setDailyView(v) {
+    dailyView = v;
+    document.querySelectorAll('#dailySeg [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+    $('viewDays').hidden = v !== 'days';
+    $('viewList').hidden = v !== 'list';
+    if (v === 'list') { openDay = null; renderList(); drawDay(); } else renderDaily();
+  }
+
+  function renderList() {
+    const all = visibleWalks();
+    const cats = new Set(all.map(catOf));
+    const chips = [['all', 'Tümü'], ['yuruyus', '🚶 Yürüyüş'], ['kosu', '🏃 Koşu'], ['diger', '🚴 Diğer'], ['arac', '🚗 Araç']]
+      .filter(([k]) => k === 'all' || cats.has(k));
+    if (!chips.some(([k]) => k === listFilter)) listFilter = 'all';
+    const list = all.filter((w) => listFilter === 'all' || catOf(w) === listFilter).sort((p, q) => q.start - p.start);
+    const months = new Map();
+    for (const w of list) {
+      const d = new Date(w.start), k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!months.has(k)) months.set(k, []);
+      months.get(k).push(w);
+    }
+    let html = `<button class="btn ghost small" id="bGpx" style="width:100%;margin-bottom:10px">＋ GPX / TCX dosyasından ekle</button>
+      <div class="chips">${chips.map(([k, l]) => `<button class="fchip${k === listFilter ? ' on' : ''}" data-f="${k}">${l}</button>`).join('')}</div>`;
+    if (!list.length) html += '<div class="empty">Henüz kayıt yok.</div>';
+    for (const [, ws] of months) {
+      const footKm = ws.filter((w) => !isCar(w)).reduce((s, w) => s + w.dist, 0);
+      const carKm = ws.filter(isCar).reduce((s, w) => s + w.dist, 0);
+      const dur = ws.filter((w) => !isCar(w)).reduce((s, w) => s + w.dur, 0);
+      html += `<div class="mhead"><b>${esc(new Date(ws[0].start).toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }))}</b>
+        <span>${ws.length} kayıt${footKm ? ` · ${fmtKm(footKm, 1)} km` : ''}${dur ? ` · ${fmtDur(dur)}` : ''}${carKm ? ` · 🚗 ${fmtKm(carKm, 0)} km` : ''}</span></div>`;
+      html += ws.map((w) => `<div class="trow" data-id="${esc(w.id)}">
+          <span class="tic">${iconOf(w)}</span>
+          <div class="meta"><b>${esc(new Date(w.start).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', weekday: 'short' }))} · ${fmtClock(w.start)}</b>
+            <small>${esc((isCar(w) ? 'Araç' : w.sport || 'Yürüyüş') + srcOf(w))}${w.place ? ' · ' + esc(w.place.split(',')[0]) : ''}</small></div>
+          <div class="tr"><b>${fmtKm(w.dist)} km</b>
+            <small>${w.dur ? fmtDur(w.dur) : ''}${!isCar(w) && w.dur ? ' · ' + fmtPace(w.dur, w.dist) + '/km' : ''}${w.hr ? ` · <span style="color:#e11d48">♥${w.hr.avg}</span>` : ''}</small></div>
+        </div>`).join('');
+    }
+    const box = $('viewList');
+    box.innerHTML = html;
+    box.querySelectorAll('.fchip').forEach((b) => (b.onclick = () => { listFilter = b.dataset.f; renderList(); }));
+    box.querySelectorAll('.trow').forEach((r) => (r.onclick = () => openDetail(r.dataset.id)));
+    $('bGpx').onclick = () => $('fileGpx').click();
+  }
+
+  // GPX / TCX dosyalarını ekle (birden fazla seçilebilir)
+  async function importTracks(files) {
+    let added = 0, dup = 0, bad = 0;
+    for (const f of files) {
+      let w = null;
+      try { w = window.izimImport.parse(await f.text(), f.name, f.lastModified); } catch { w = null; }
+      if (!w) { bad++; continue; }
+      if (walks.some((x) => x.id === w.id || Math.abs(x.start - w.start) < 60000)) { dup++; continue; }
+      w._s = false;
+      walks.push(w); added++;
+    }
+    if (added) {
+      walks.sort((p, q) => q.start - p.start);
+      saveWalks(); buildIndex(); syncSoon(); fillPlaces();
+    }
+    if (tab === 'daily') { if (dailyView === 'list') renderList(); else renderDaily(); drawDay(); }
+    const parts = [`${added} antrenman eklendi`];
+    if (dup) parts.push(`${dup} tanesi zaten vardı`);
+    if (bad) parts.push(`${bad} dosya okunamadı (rota yok ya da GPX/TCX değil)`);
+    alert(parts.join(', ') + '.');
+  }
+
   // ---------- Yürüyüş detayı ----------
   let detailId = null;
 
@@ -1039,7 +1112,7 @@
         <button class="icon-btn" id="detBack" aria-label="Geri">‹</button>
         <div class="meta"><b>${esc(new Date(w.start).toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' }))}</b>
           <small>${fmtClock(w.start)}–${fmtClock(w.end)}${w.place ? ' · ' + esc(w.place) : ''}</small></div>
-        ${car ? `<span class="badge" style="background:rgba(124,58,237,.14);color:${CAR}">🚗 Araç</span>` : w.source === 'polar' ? `<span class="badge">Polar · ${esc(w.sport || '')}</span>` : m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}
+        ${car ? `<span class="badge" style="background:rgba(124,58,237,.14);color:${CAR}">🚗 Araç</span>` : w.source === 'polar' || w.sport ? `<span class="badge">${esc((w.source === 'polar' ? 'Polar · ' : '') + (w.sport || ''))}</span>` : m.laps ? `<span class="badge">${m.laps} tur</span>` : ''}
       </div>
       <div class="tiles">${tiles.map(([v, l]) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`).join('')}</div>
       ${hrHtml}${splitHtml}
@@ -1072,7 +1145,7 @@
   function closeDetail() {
     detailId = null;
     $('p-detail').hidden = true;
-    if (tab === 'daily') { $('p-daily').hidden = false; renderDaily(); drawDay(); }
+    if (tab === 'daily') { $('p-daily').hidden = false; if (dailyView === 'list') renderList(); else renderDaily(); drawDay(); }
   }
 
   // ---------- Paylaşım kartı (görsel) ----------
@@ -1570,7 +1643,7 @@
     if (t === 'settings') { renderAccount(); renderPolar(); }
     map.closePopup();
 
-    if (t === 'daily') { map.removeLayer(fog); map.addLayer(dayLayer); fillPlaces(); renderDaily(); drawDay(); }
+    if (t === 'daily') { map.removeLayer(fog); map.addLayer(dayLayer); fillPlaces(); if (dailyView === 'list') renderList(); else renderDaily(); drawDay(); }
     else { map.removeLayer(dayLayer); map.addLayer(fog); }
     applyMode();
 
@@ -1592,6 +1665,9 @@
   $('bPause').onclick = togglePause;
   $('bStop').onclick = stop;
   $('bHr').onclick = hrConnect;
+  document.querySelectorAll('#dailySeg [data-view]').forEach((b) => (b.onclick = () => setDailyView(b.dataset.view)));
+  $('fileGpx').onchange = (e) => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) importTracks(fs); };
+  $('bGpx2').onclick = () => $('fileGpx').click();
   document.querySelectorAll('.seg [data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   document.querySelectorAll('#typeSeg [data-type]').forEach((b) => (b.onclick = () => { startType = b.dataset.type; renderButtons(); }));
   const renderCarSeg = () => document.querySelectorAll('#carSeg [data-car]').forEach((b) => b.classList.toggle('on', (b.dataset.car === '1') === showCar));

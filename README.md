@@ -7,6 +7,8 @@ Yürüdüğün yolları haritaya çizer ve kaydeder. Sonra **Haritam** sekmesini
 - **Harita modları (Ayarlar → Harita):** *Normal* — harita tamamen açık, yollar çizgi. *Keşif* — kara ve göller sisle kapalı, deniz açık; yürüdükçe harita açılır.
 - **Nabız ve form (Günlük):** son 30 günün ortalama nabzı, hızı ve *kalp verimliliği* (bir atışta kaç metre) önceki 30 günle karşılaştırılır; 8 haftalık grafik. Yürüyüş ve koşu ayrı değerlendirilir.
 - **Yürüyüş detayı:** Günlük'te bir yürüyüşe dokun: haritada rota ve km işaretleri, nabız grafiği, kilometre tempoları, paylaş/sil.
+- **Antrenmanlar listesi (Günlük → Antrenmanlar):** tüm kayıtlar aylara göre, aylık toplamlarla; yürüyüş/koşu/araç filtresi.
+- **GPX / TCX içe aktarma:** Polar Flow, Strava, Garmin'den indirilen dosyalar (birden çok seçilebilir); nabız ve tempo bilgisi de okunur, aynı antrenman iki kez eklenmez.
 - **Paylaşım kartı:** yürüyüşü görsel olarak WhatsApp vb. ile paylaş (desteklenmezse görsel indirilir).
 - **Mahalleler (Keşif):** gezdiğin mahallelerin yüzde kaçını gezdiğin (OpenStreetMap sınırları).
 - **Araç modu:** kayda başlamadan "🚗 Araç" seç. Araç yolları mor kesikli çizgi; keşif sisini açar ama yürüyüş istatistiklerine karışmaz. Ayarlar → Harita'dan gizlenebilir.

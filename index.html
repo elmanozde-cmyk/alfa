@@ -141,6 +141,19 @@
   .area-r .bar { margin-top:4px; }
   .pin { width:22px; height:22px; border-radius:50%; border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.35); display:grid; place-items:center; font-size:11px; }
   .kmpin { width:24px; height:24px; border-radius:50%; background:#fff; color:#0f766e; border:2px solid #0f766e; font:700 11px system-ui; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+  .chips { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; margin-bottom:6px; }
+  .fchip { border:0; background:var(--soft); color:var(--text); border-radius:999px; padding:7px 13px; font-weight:600; font-size:13.5px; white-space:nowrap; cursor:pointer; }
+  .fchip.on { background:var(--accent); color:#fff; }
+  @media (prefers-color-scheme: dark) { .fchip.on { color:#06201c; } }
+  .mhead { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin:14px 2px 6px; }
+  .mhead b { text-transform:capitalize; }
+  .mhead span { color:var(--muted); font-size:12.5px; text-align:right; }
+  .trow { display:flex; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .trow:last-child { border-bottom:0; }
+  .tic { width:36px; height:36px; border-radius:12px; background:var(--soft); display:grid; place-items:center; font-size:18px; flex:none; }
+  .trow .meta { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .trow .meta small, .trow .tr small { color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .trow .tr { text-align:right; display:flex; flex-direction:column; }
   /* Ayarlar */
   .card { background:var(--soft); border-radius:18px; padding:14px; }
   .card.list { padding:4px 0; }
@@ -213,6 +226,9 @@
 
 <!-- Günlük -->
 <div class="panel tall" id="p-daily" hidden>
+  <div class="seg" id="dailySeg" style="margin-bottom:12px"><button data-view="days" class="on">Günler</button><button data-view="list">Antrenmanlar</button></div>
+  <div id="viewList" hidden></div>
+  <div id="viewDays">
   <div class="tiles four">
     <div class="tile"><b id="dWeek">0</b><span>bu hafta</span></div>
     <div class="tile"><b id="dMonth">0</b><span>bu ay</span></div>
@@ -225,6 +241,7 @@
   <div id="form"></div>
   <h3>Gün gün</h3>
   <div id="days"></div>
+  </div>
 </div>
 
 <!-- Yürüyüş detayı -->
@@ -258,8 +275,13 @@
       <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
       <span><b>Yedekten geri yükle</b><small>Daha önce indirdiğin dosyayı ekle</small></span>
     </button>
+    <button class="item-row" id="bGpx2">
+      <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><polyline points="14 7 21 7 21 14"/></svg></span>
+      <span><b>GPX / TCX dosyası ekle</b><small>Polar Flow, Strava, Garmin'den indirdiğin antrenmanlar</small></span>
+    </button>
   </div>
   <input type="file" id="fileIn" accept=".json,application/json" hidden>
+  <input type="file" id="fileGpx" accept=".gpx,.tcx,application/gpx+xml,application/vnd.garmin.tcx+xml" multiple hidden>
   <div class="sec-title">Hakkında</div>
   <div class="card about">
     İzim yürüdüğün yolları kaydeder ve keşif haritanı çıkarır. Kayıtlar önce bu telefona kaydedilir; giriş yaptıysan buluta da yedeklenir.<br>
@@ -278,8 +300,9 @@
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.89.0/dist/umd/supabase.js"></script>
-<script src="mapstyle.js?v=12"></script>
-<script src="fog.js?v=12"></script>
-<script src="app.js?v=12"></script>
+<script src="mapstyle.js?v=13"></script>
+<script src="fog.js?v=13"></script>
+<script src="importer.js?v=13"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
