@@ -208,11 +208,26 @@
 
   // ---------- Harita ----------
   const map = L.map('map', { zoomControl: false }).setView([39.0, 35.0], 6);
-  // Modern, sade harita (CARTO Voyager); retina ekranlarda keskin
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    maxZoom: 20, subdomains: 'abcd', detectRetina: false,
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-  }).addTo(map);
+  // Modern harita: OpenFreeMap (ücretsiz, anahtar istemez). Cihaz desteklemezse klasik OSM'e döner.
+  (function addBaseMap() {
+    const osm = () => L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    const webgl = (() => {
+      try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
+    })();
+    if (!webgl || !L.maplibreGL || !window.maplibregl) return osm();
+    try {
+      const gl = L.maplibreGL({
+        style: 'https://tiles.openfreemap.org/styles/liberty',
+        attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; OpenStreetMap',
+      }).addTo(map);
+      // Harita stili yüklenemezse (servis kapalı vb.) klasik haritaya geç
+      let fell = false;
+      const fallback = () => { if (fell) return; fell = true; map.removeLayer(gl); osm(); };
+      const m = gl.getMaplibreMap();
+      m.on('error', () => { if (!m.isStyleLoaded()) fallback(); });
+      setTimeout(() => { if (!m.isStyleLoaded()) fallback(); }, 12000);
+    } catch { osm(); }
+  })();
   map.createPane('fog').style.zIndex = 350;
   map.getPane('fog').classList.add('fog-pane');
 
