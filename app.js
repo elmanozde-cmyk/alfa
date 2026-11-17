@@ -603,6 +603,28 @@
       try { d.gatt.disconnect(); } catch {}
       renderHr(); return;
     }
+    if (NATIVE) {
+      let info = null, tries = 0;
+      const onVal = (v) => onHr({ target: { value: v } });
+      const onDrop = () => {
+        if (!hrDev || !info || hrDev.native !== info.id) return;
+        hrNow = null; renderHr();
+        const retry = () => {
+          if (!hrDev || hrDev.native !== info.id || tries++ > 5) return;
+          window.izimNative.hrAttach(info.id, onVal, onDrop).then(() => { tries = 0; }).catch(() => setTimeout(retry, 3000));
+        };
+        setTimeout(retry, 2000);
+      };
+      try {
+        info = await window.izimNative.hrConnect(onVal, onDrop);
+        hrDev = { native: info.id, name: info.name, gatt: { disconnect: () => window.izimNative.hrDisconnect(info.id) } };
+        renderHr(); note(`${info.name} bağlandı.`);
+      } catch (e) {
+        hrDev = null; renderHr();
+        if (!/cancel|iptal/i.test(String(e && e.message))) note('Nabız cihazına bağlanılamadı. Bluetooth açık mı, bant takılı mı?', true);
+      }
+      return;
+    }
     if (!navigator.bluetooth) {
       alert('Bu tarayıcı Bluetooth ile nabız bağlantısını desteklemiyor.\n\nAndroid telefonda Chrome ile açman gerekiyor (iPhone desteklemiyor).');
       return;
@@ -704,6 +726,33 @@
     geoErr = true;
     note(msgs[err.code] || 'Konum hatası.', err.code === 1);
   }
+  // ---------- Android uygulaması: ekran kapalıyken de konum ----------
+  const NATIVE = !!(window.izimNative && window.izimNative.isNative);
+  let nativeWatch = null;
+  const onNativeLoc = (loc) => onPosition({
+    coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy ?? 30 },
+    timestamp: loc.time || Date.now(),
+  });
+  async function nativeTrack(on) {
+    if (!NATIVE) return;
+    if (on && nativeWatch === null) {
+      nativeWatch = 'starting';
+      try {
+        nativeWatch = await window.izimNative.startTracking(onNativeLoc, (err) => {
+          if (err && err.code === 'NOT_AUTHORIZED') {
+            if (confirm('İzim konum izni olmadan kayıt yapamaz. Ayarlar açılsın mı?')) window.izimNative.openSettings();
+          } else note('Konum alınamadı.', true);
+        });
+        // Tarayıcının konum takibini durdur (aynı konum iki kez gelmesin)
+        if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+      } catch (e) { nativeWatch = null; note('Arka planda konum başlatılamadı.', true); }
+    } else if (!on && nativeWatch !== null && nativeWatch !== 'starting') {
+      const id = nativeWatch; nativeWatch = null;
+      try { await window.izimNative.stopTracking(id); } catch {}
+      startWatch();
+    }
+  }
+
   function startWatch() {
     if (!('geolocation' in navigator)) { note('Bu cihaz konum desteklemiyor.', true); return; }
     if (watchId !== null) return;
@@ -729,11 +778,11 @@
     bestAcc = Infinity; carHits = 0; carHint = false;
     liveRebuild(); saveCurrent();
     follow = true;
-    startWatch(); lockScreen(); startTick();
+    startWatch(); lockScreen(); startTick(); nativeTrack(true);
     drawLive(); renderButtons(); renderStats();
     lastMoveT = Date.now();
     say(startType === 'arac' ? 'Araç kaydı başladı' : 'Yürüyüş başladı');
-    note('Kayıt başladı. Ekranı açık tut, uygulamayı arka plana atma.');
+    note(NATIVE ? 'Kayıt başladı. Ekranı kapatabilirsin; bildirim çubuğunda kayıt sürer.' : 'Kayıt başladı. Ekranı açık tut, uygulamayı arka plana atma.');
   }
 
   function togglePause() {
@@ -741,13 +790,13 @@
     if (recording()) {
       cur.activeMs += Date.now() - cur.resumedAt;
       cur.resumedAt = null; cur.autoPaused = false;
-      stopTick(); releaseScreen();
+      stopTick(); releaseScreen(); nativeTrack(false);
       note('Duraklatıldı.');
     } else {
       cur.autoPaused = false; lastMoveT = Date.now();
       cur.resumedAt = Date.now();
       if (cur.segs[cur.segs.length - 1].length) cur.segs.push([]);
-      startWatch(); lockScreen(); startTick();
+      startWatch(); lockScreen(); startTick(); nativeTrack(true);
       note('Devam ediliyor.');
     }
     saveCurrent(); renderButtons(); renderStats();
@@ -788,7 +837,7 @@
     }
     cur = null;
     store.del(KEY_CURRENT);
-    liveRebuild(); stopTick(); releaseScreen();
+    liveRebuild(); stopTick(); releaseScreen(); nativeTrack(false);
     drawLive(); renderButtons(); renderStats();
     if (map.hasLayer(fog)) fog.redraw();
   }
@@ -1711,11 +1760,22 @@
           <div class="avatar" style="background:#d97706">✉</div>
           <div class="meta"><b>E-postanı kontrol et</b><span class="muted">${esc(pending.email)}</span></div>
         </div>
-        <p class="muted" style="margin:10px 0 0">Giriş <b>henüz tamamlanmadı</b>. E-postadaki giriş bağlantısına bu telefonda dokun.
+        <p class="muted" style="margin:10px 0 0">Giriş <b>henüz tamamlanmadı</b>. ${NATIVE ? 'E-postadaki <b>kodu</b> aşağıya yaz.' : 'E-postadaki giriş bağlantısına bu telefonda dokun ya da kodu aşağıya yaz.'}
           Bir kez giriş yapınca uygulama seni hep girişli tutar.</p>
+        <form id="otpForm" class="otp"><input id="otpCode" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="E-postadaki kod">
+          <button class="btn small">Kodla gir</button></form>
         <div class="acc-actions"><button class="link" id="accResend">Tekrar gönder</button>
           <button class="link" id="accBack" style="color:var(--muted)">Farklı e-posta</button></div>`;
       $('accResend').onclick = (e) => sendLink(pending.email, e.target);
+      $('otpForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const token = $('otpCode').value.replace(/\s/g, '');
+        if (!token) return;
+        const btn = e.target.querySelector('button'); btn.disabled = true;
+        const { error } = await sb.auth.verifyOtp({ email: pending.email, token, type: 'email' });
+        btn.disabled = false;
+        if (error) alert(/expired|invalid/i.test(error.message) ? 'Kod geçersiz ya da süresi dolmuş. Yeni kod iste.' : 'Giriş yapılamadı: ' + error.message);
+      };
       $('accBack').onclick = () => { pending = null; store.del(KEY_PENDING); renderAccount(); };
       return;
     }
@@ -1961,10 +2021,12 @@
       saveCurrent(); lockScreen(); startTick(); lastMoveT = Date.now();
       note('Yarım kalan yürüyüşe devam ediliyor.');
     }
+    if (cur.autoPaused) { startTick(); lockScreen(); }
+    if (cur.resumedAt || cur.autoPaused) nativeTrack(true);
     liveRebuild(); drawLive();
   }
 
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  if (!NATIVE && 'serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 })();

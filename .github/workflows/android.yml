@@ -1,0 +1,63 @@
+name: Android APK
+
+on:
+  push:
+    paths-ignore:
+      - 'supabase/**'
+      - 'README.md'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Bağımlılıklar
+        run: npm ci
+
+      - name: Web dosyaları ve Android projesi
+        run: npm run build:android
+
+      - name: APK derle
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: APK'yı adlandır
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk izim.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: izim-apk
+          path: izim.apk
+
+      # Telefondan kolay indirmek için sabit bir bağlantı: .../releases/download/android-latest/izim.apk
+      - name: İndirme sayfasına yükle
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: İzim Android (son sürüm)
+          body: |
+            Telefonda bu sayfadan **izim.apk** dosyasını indirip kur.
+            Derleme: ${{ github.run_number }} · ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          files: izim.apk
