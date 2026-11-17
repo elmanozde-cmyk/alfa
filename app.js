@@ -200,7 +200,7 @@
     walks.filter((w) => !w.place && w.segs[0] && w.segs[0][0]).slice(0, 20).forEach((w) => {
       placeName(w.segs[0][0][0], w.segs[0][0][1]).then((name) => {
         if (!name) return;
-        w.place = name; saveWalks();
+        w.place = name; w._s = false; saveWalks(); syncSoon();
         if (tab === 'daily') renderDaily();
       });
     });
@@ -431,7 +431,7 @@
         segs: segs.map((s) => s.map((p) => [p[0], p[1]])),
       };
       walks.unshift(w);
-      saveWalks();
+      saveWalks(); syncSoon();
       buildIndex();
       const m = walkMeta.get(w.id);
       note(`Kaydedildi: ${fmtKm(w.dist)} km · ${fmtTime(w.dur)} · ${m.fresh} yeni nokta${m.laps ? ` · ${m.laps} tur` : ''}`);
@@ -622,7 +622,8 @@
           row.querySelector('button').onclick = () => {
             if (!confirm('Bu yürüyüş silinsin mi?')) return;
             walks = walks.filter((x) => x.id !== w.id);
-            saveWalks(); buildIndex();
+            markDeleted(w.id);
+            saveWalks(); buildIndex(); syncSoon();
             if (!walks.some((x) => dayKey(x.start) === k)) openDay = null;
             renderDaily(); drawDay();
           };
@@ -653,7 +654,7 @@
 
   // ---------- Yedek ----------
   function exportData() {
-    const blob = new Blob([JSON.stringify({ app: 'izim', version: 1, walks })], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ app: 'izim', version: 1, walks: walks.map(clean) })], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `izim-yedek-${dayKey(Date.now())}.json`;
@@ -668,13 +669,155 @@
         const incoming = Array.isArray(data) ? data : data.walks;
         if (!Array.isArray(incoming)) throw new Error();
         const ids = new Set(walks.map((w) => w.id));
-        const fresh = incoming.filter((w) => w && w.id && Array.isArray(w.segs) && !ids.has(w.id));
+        const fresh = incoming.filter((w) => w && w.id && Array.isArray(w.segs) && !ids.has(w.id)).map((w) => ({ ...w, _s: false }));
         walks = walks.concat(fresh).sort((a, b) => b.start - a.start);
-        saveWalks(); buildIndex(); renderDaily(); drawDay();
+        saveWalks(); buildIndex(); renderDaily(); drawDay(); syncSoon();
         alert(`${fresh.length} yürüyüş eklendi.`);
       } catch { alert('Dosya okunamadı.'); }
     };
     r.readAsText(file);
+  }
+
+  // ---------- Bulut eşitleme (Supabase) ----------
+  // Telefon her zaman ana kayıttır: internet yokken de çalışır, bağlantı gelince eşitler.
+  const SB_URL = 'https://ihvzwkpnhihmbzdvljvf.supabase.co';
+  const SB_KEY = 'sb_publishable_PipYjTO8bk6678h49Aw5Sg_DGJaEoS1'; // herkese açık anahtar (gizli değil)
+  const KEY_TOMB = 'izim.deleted.v1';
+  const KEY_PULL = 'izim.pulled.v1.';
+  let sb = null, user = null, syncing = false, syncAgain = false, syncMsg = '', syncTimer = null, mailSent = '';
+  try {
+    if (window.supabase) sb = window.supabase.createClient(SB_URL, SB_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+  } catch { sb = null; }
+  let tombs = store.get(KEY_TOMB, []);
+
+  function clean(w) { const { _s, ...rest } = w; return rest; }
+  function markDeleted(id) { if (!tombs.includes(id)) { tombs.push(id); store.set(KEY_TOMB, tombs); } }
+  function syncSoon() { clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800); }
+  function setSync(msg) { syncMsg = msg; renderAccount(); }
+
+  function refreshViews() {
+    if (tab === 'daily') { renderDaily(); drawDay(); }
+    if (tab === 'explore') renderExplore();
+    if (map.hasLayer(fog)) fog.redraw();
+  }
+
+  async function sync() {
+    if (!sb || !user) return;
+    if (!navigator.onLine) { setSync('Çevrimdışı · bağlantı gelince eşitlenecek'); return; }
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
+    setSync('Eşitleniyor…');
+    try {
+      // 1) Bu cihazda silinenler
+      if (tombs.length) {
+        const sent = [...tombs];
+        const rows = sent.map((id) => ({
+          user_id: user.id, id, deleted: true, data: {},
+          start_at: new Date(parseInt(id, 36) || Date.now()).toISOString(),
+        }));
+        const { error } = await sb.from('walks').upsert(rows, { onConflict: 'user_id,id' });
+        if (error) throw error;
+        tombs = tombs.filter((id) => !sent.includes(id));
+        store.set(KEY_TOMB, tombs);
+      }
+      // 2) Henüz yüklenmemiş yürüyüşler
+      const pending = walks.filter((w) => !w._s);
+      for (let i = 0; i < pending.length; i += 50) {
+        const chunk = pending.slice(i, i + 50);
+        const { error } = await sb.from('walks').upsert(chunk.map((w) => ({
+          user_id: user.id, id: w.id, deleted: false, data: clean(w), start_at: new Date(w.start).toISOString(),
+        })), { onConflict: 'user_id,id' });
+        if (error) throw error;
+        chunk.forEach((w) => (w._s = true));
+        saveWalks();
+      }
+      // 3) Diğer cihazlardan gelen değişiklikler
+      const since = store.get(KEY_PULL + user.id, '1970-01-01T00:00:00+00:00');
+      let latest = since, changed = false;
+      for (let from = 0; ; from += 500) {
+        const { data, error } = await sb.from('walks').select('id,data,deleted,updated_at')
+          .gt('updated_at', since).order('updated_at', { ascending: true }).range(from, from + 499);
+        if (error) throw error;
+        for (const r of data) {
+          const i = walks.findIndex((w) => w.id === r.id);
+          if (r.deleted) {
+            if (i >= 0) { walks.splice(i, 1); changed = true; }
+          } else if (r.data && Array.isArray(r.data.segs)) {
+            const incoming = { ...r.data, id: r.id, _s: true };
+            if (i < 0) { walks.push(incoming); changed = true; }
+            else if (walks[i]._s) { walks[i] = incoming; changed = true; }
+          }
+          if (new Date(r.updated_at) > new Date(latest)) latest = r.updated_at;
+        }
+        if (data.length < 500) break;
+      }
+      store.set(KEY_PULL + user.id, latest);
+      if (changed) {
+        walks.sort((a, b) => b.start - a.start);
+        saveWalks(); buildIndex(); refreshViews();
+      }
+      setSync('Eşitlendi ✓');
+    } catch (e) {
+      console.warn('Eşitleme hatası', e);
+      setSync('Eşitlenemedi · sonra tekrar denenecek');
+    }
+    syncing = false;
+    if (syncAgain) { syncAgain = false; sync(); }
+  }
+
+  function renderAccount() {
+    const box = $('account');
+    if (!box) return;
+    if (!sb) { box.hidden = true; return; }
+    box.hidden = false;
+    if (user) {
+      box.innerHTML = `<div class="acc-line"><span>☁️ <b>${esc(user.email || 'Hesap')}</b></span>
+        <button class="link" id="accOut">Çıkış</button></div>
+        <div class="muted">${esc(syncMsg || 'Bulutta yedekleniyor')}</div>`;
+      $('accOut').onclick = async () => {
+        if (!confirm('Çıkış yapılsın mı? Yürüyüşlerin bu telefonda kalır.')) return;
+        await sb.auth.signOut();
+      };
+      return;
+    }
+    if (mailSent) {
+      box.innerHTML = `<div class="acc-line"><span>📧 <b>${esc(mailSent)}</b> adresine giriş bağlantısı gönderildi.</span></div>
+        <div class="muted">E-postandaki bağlantıya bu telefonda dokun. Gelmediyse spam klasörüne bak.</div>
+        <button class="link" id="accBack">Farklı e-posta</button>`;
+      $('accBack').onclick = () => { mailSent = ''; renderAccount(); };
+      return;
+    }
+    box.innerHTML = `<div class="acc-line"><span>☁️ Yürüyüşlerini buluta yedekle, telefon değişse de kaybolmasın.</span></div>
+      <form class="row" id="accForm" style="margin-top:8px">
+        <input type="email" id="accEmail" required placeholder="e-posta adresin" autocomplete="email">
+        <button class="btn small" style="flex:0 0 auto">Giriş</button>
+      </form>`;
+    $('accForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const email = $('accEmail').value.trim();
+      const btn = e.target.querySelector('button');
+      btn.disabled = true; btn.textContent = '…';
+      const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+      if (error) {
+        btn.disabled = false; btn.textContent = 'Giriş';
+        alert(/rate|limit|seconds/i.test(error.message) ? 'Çok sık denendi, biraz bekleyip tekrar dene.' : 'Gönderilemedi: ' + error.message);
+        return;
+      }
+      mailSent = email; renderAccount();
+    };
+  }
+
+  if (sb) {
+    sb.auth.onAuthStateChange((event, session) => {
+      const was = user && user.id;
+      user = session ? session.user : null;
+      if (!user) syncMsg = '';
+      renderAccount();
+      if (user && user.id !== was) setTimeout(sync, 0);
+    });
+    window.addEventListener('online', syncSoon);
   }
 
   // ---------- Sekmeler ----------
@@ -710,11 +853,13 @@
   map.on('dragstart', () => { follow = false; });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && recording()) lockScreen();
+    if (document.visibilityState === 'visible') syncSoon();
   });
 
   // ---------- Açılış ----------
   buildIndex();
   renderLegend();
+  renderAccount();
   if (cur) {
     if (cur.resumedAt) {
       // Sayfa kapanmıştı: kapalı kalan süreyi sayma, yeni parça başlat

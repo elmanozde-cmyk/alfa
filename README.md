@@ -8,10 +8,14 @@ Yürüdüğün yolları haritaya çizer ve kaydeder. Sonra **Haritam** sekmesini
 - **Günlük:** Bu hafta / bu ay / toplam km, seri (art arda yürünen gün), son 14 günün grafiği ve gün gün özet: nerede yürüdün (mahalle adı), kaç km, kaç yeni nokta keşfettin. Bir güne dokununca o günün rotaları haritada görünür.
 - **Yedekle / Geri yükle:** Kayıtları JSON dosyası olarak indir veya başka cihaza aktar.
 - Mahalle adları OpenStreetMap (Nominatim) üzerinden alınır.
-- Veriler sadece telefonda (tarayıcı hafızasında) tutulur, sunucuya gitmez.
+- Veriler önce telefona kaydedilir. Günlük sekmesinden e-posta ile giriş yapılırsa Supabase'e yedeklenir ve cihazlar arasında eşitlenir (internet yokken de çalışır).
 - Sayfa yanlışlıkla kapanırsa yarım kalan yürüyüş kaybolmaz, açınca devam eder.
 
 **Çalıştırmak:** Klasörü HTTPS olan bir yere koy (ör. GitHub Pages). Konum için HTTPS şart. Telefonda açıp "Ana ekrana ekle" de.
 Yerelde denemek: `python3 -m http.server` → `http://localhost:8000`.
 
 **Sınır:** Web uygulaması olduğu için ekran kilitlenince veya uygulama arka plana atılınca telefon GPS'i durdurabilir. Uygulama kayıt sırasında ekranı açık tutmaya çalışır. Cep telefonu kilitliyken de kayıt için ileride native (Capacitor/Android) sürüm gerekir.
+
+## Bulut (Supabase)
+- Tablo ve erişim kuralları: `supabase/schema.sql` (Supabase → SQL Editor'de bir kez çalıştırılır).
+- Uygulamada sadece **publishable** anahtar bulunur. `sb_secret_...` anahtarı asla koda konmaz.
