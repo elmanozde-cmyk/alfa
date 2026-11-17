@@ -39,7 +39,7 @@
     del(key) { try { localStorage.removeItem(key); } catch {} },
   };
 
-  let walks = store.get(KEY_WALKS, []);
+  let walks = []; // açılışta IndexedDB'den yüklenir (loadWalks)
   // Harita modu: 'normal' (her yer açık, yollar çizgi) | 'kesif' (kara kapalı, gezdikçe açılır, deniz açık)
   const KEY_MODE = 'izim.mode.v1';
   let mode = store.get(KEY_MODE, 'normal');
@@ -99,7 +99,73 @@
     }
     return out;
   }
-  const saveWalks = () => store.set(KEY_WALKS, walks);
+  // ---------- Kalıcı depolama (IndexedDB: her yürüyüş ayrı kayıt, pratikte sınırsız alan) ----------
+  // Sadece değişen yürüyüşler yazılır; IndexedDB yoksa localStorage'a döner.
+  let idb = null;
+  const savedSig = new Map(); // id -> imza (değişiklik tespiti)
+  const sigOf = (w) => `${w._s ? 1 : 0}|${w.place || ''}|${w.start}|${w.dist}|${w.segs.length}|${w.hr ? w.hr.avg : ''}|${w.type || ''}`;
+  function idbOpen() {
+    return new Promise((res, rej) => {
+      if (!('indexedDB' in window)) return rej(new Error('no-idb'));
+      const r = indexedDB.open('izim', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('walks', { keyPath: 'id' });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+      r.onblocked = () => rej(new Error('blocked'));
+    });
+  }
+  const idbAll = (db) => new Promise((res, rej) => {
+    const q = db.transaction('walks').objectStore('walks').getAll();
+    q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error);
+  });
+  const idbWrite = (db, puts, dels) => new Promise((res, rej) => {
+    const tx = db.transaction('walks', 'readwrite'), st = tx.objectStore('walks');
+    for (const w of puts) st.put(w);
+    for (const id of dels) st.delete(id);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+  });
+  let saveChain = Promise.resolve();
+  function saveWalks() {
+    if (!idb) { store.set(KEY_WALKS, walks); return; }
+    const ids = new Set(walks.map((w) => w.id));
+    const puts = walks.filter((w) => savedSig.get(w.id) !== sigOf(w));
+    const dels = [...savedSig.keys()].filter((id) => !ids.has(id));
+    if (!puts.length && !dels.length) return;
+    // Kopyalayıp yaz (yazma sürerken nesne değişirse karışmasın)
+    const snap = puts.map((w) => JSON.parse(JSON.stringify(w)));
+    for (const w of puts) savedSig.set(w.id, sigOf(w));
+    for (const id of dels) savedSig.delete(id);
+    saveChain = saveChain.then(() => idbWrite(idb, snap, dels)).catch((e) => {
+      console.warn('Kaydetme hatası', e);
+      for (const w of puts) savedSig.delete(w.id); // bir sonraki kaydetmede tekrar dene
+      note('Kaydedilemedi: depolama sorunu. Yedek almanı öneririm.', true);
+    });
+  }
+  async function loadWalks() {
+    try {
+      idb = await idbOpen();
+      const stored = await idbAll(idb);
+      const legacy = store.get(KEY_WALKS, null);
+      const have = new Set(stored.map((w) => w.id));
+      const moved = Array.isArray(legacy) ? legacy.filter((w) => w && w.id && Array.isArray(w.segs) && !have.has(w.id)) : [];
+      if (moved.length) await idbWrite(idb, moved, []);
+      walks = stored.concat(moved).sort((p, q) => q.start - p.start);
+      for (const w of walks) savedSig.set(w.id, sigOf(w));
+      if (legacy) {
+        // Eski alanı ancak aktarım doğrulanınca boşalt
+        const check = await idbAll(idb);
+        if (check.length >= walks.length) store.del(KEY_WALKS);
+      }
+    } catch (e) {
+      console.warn('IndexedDB kullanılamıyor, localStorage ile devam', e);
+      idb = null;
+      walks = store.get(KEY_WALKS, []);
+    }
+    // Tarayıcıdan "bu siteyi temizleme" izni iste (destekleniyorsa sessizce verilir)
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
+  }
+  const ready = loadWalks();
+  window.izimDebug = { walks: () => walks, ready }; // testler için
 
   // ---------- Yardımcılar ----------
   function haversine(a, b) {
@@ -395,16 +461,24 @@
     if (now) run(); else glFogTimer = setTimeout(run, 1200);
   }
 
+  const routeCanvas = L.canvas({ padding: 0.3 }); // çok sayıda rota için hızlı çizim
+  // Genel görünüm için sadeleştirilmiş rota kopyası (6 m), bir kez hesaplanır
+  const coarseCache = new WeakMap();
+  function coarse(w) {
+    let c = coarseCache.get(w);
+    if (!c) { c = w.segs.map((s) => simplifyIdx(s, 6).map((i) => s[i])); coarseCache.set(w, c); }
+    return c;
+  }
   function routeStyle(w, strong) {
     return isCar(w)
-      ? { color: CAR, weight: strong ? 5 : 3, opacity: strong ? 0.85 : 0.6, dashArray: '8 8', lineCap: 'round', interactive: false }
-      : { color: ROUTE, weight: strong ? 6 : 4, opacity: strong ? 0.9 : 0.55, lineCap: 'round', lineJoin: 'round', interactive: false };
+      ? { color: CAR, weight: strong ? 5 : 3, opacity: strong ? 0.85 : 0.6, dashArray: '8 8', lineCap: 'round', interactive: false, renderer: routeCanvas }
+      : { color: ROUTE, weight: strong ? 6 : 4, opacity: strong ? 0.9 : 0.55, lineCap: 'round', lineJoin: 'round', interactive: false, renderer: routeCanvas };
   }
   // Normal modda tüm yürüyüşler ince çizgi olarak
   const routesLayer = L.layerGroup();
   function drawRoutes() {
     routesLayer.clearLayers();
-    for (const w of visibleWalks()) L.polyline(w.segs, routeStyle(w, false)).addTo(routesLayer);
+    for (const w of visibleWalks()) L.polyline(coarse(w), routeStyle(w, false)).addTo(routesLayer);
   }
   function onIndexChanged() { drawRoutes(); updateGlFog(true); if (map.hasLayer(fog)) fog.redraw(); }
 
@@ -694,9 +768,13 @@
       const w = {
         id: cur.start.toString(36), start: cur.start, end: Date.now(),
         dist: Math.round(cur.dist), dur: cur.activeMs,
-        segs: segs.map((s) => s.map((p) => [p[0], p[1]])),
-        tt: segs.map((s) => s.map((p) => Math.round((p[2] - cur.start) / 1000))), // başlangıçtan saniye
+        segs: [], tt: [],
       };
+      for (const s of segs) {
+        const keep = simplifyIdx(s, 2);
+        w.segs.push(keep.map((i) => [s[i][0], s[i][1]]));
+        w.tt.push(keep.map((i) => Math.round((s[i][2] - cur.start) / 1000))); // başlangıçtan saniye
+      }
       if (cur.type === 'arac') w.type = 'arac';
       if (cur.hr && cur.hr.n) w.hr = { avg: Math.round(cur.hr.sum / cur.hr.n), max: cur.hr.max, s: cur.hr.s };
       walks.unshift(w);
@@ -713,6 +791,29 @@
     liveRebuild(); stopTick(); releaseScreen();
     drawLive(); renderButtons(); renderStats();
     if (map.hasLayer(fog)) fog.redraw();
+  }
+
+  // Douglas–Peucker: rotadan 2 m'den az sapan ara noktaları at (çizgi ve mesafe değişmez)
+  function simplifyIdx(pts, tol) {
+    const n = pts.length;
+    if (n < 3) return pts.map((_, i) => i);
+    const lat0 = pts[0][0] * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110540;
+    const P = pts.map((p) => [p[1] * kx, p[0] * ky]);
+    const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1;
+    const stack = [[0, n - 1]];
+    while (stack.length) {
+      const [s, e] = stack.pop();
+      const [x1, y1] = P[s], [x2, y2] = P[e], dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1e-9;
+      let best = -1, bd = tol;
+      for (let i = s + 1; i < e; i++) {
+        const d = Math.abs(dy * P[i][0] - dx * P[i][1] + x2 * y1 - y2 * x1) / L;
+        if (d > bd) { bd = d; best = i; }
+      }
+      if (best > 0) { keep[best] = 1; stack.push([s, best], [best, e]); }
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) if (keep[i]) out.push(i);
+    return out;
   }
 
   // ---------- Keşif ----------
@@ -782,7 +883,7 @@
   map.on('click', (e) => { if (tab === 'explore' || tab === 'walk') showCellPopup(e.latlng); });
 
   // ---------- Günlük ----------
-  let openDay = null;
+  let openDay = null, dayLimit = 30;
 
   function groupDays() {
     const days = new Map();
@@ -970,7 +1071,7 @@
       box.innerHTML = '<div class="empty">Henüz yürüyüş yok. İlk yürüyüşünü kaydet, günlüğün burada birikecek.</div>';
       return;
     }
-    for (const [k, list] of days) {
+    for (const [k, list] of days.slice(0, Math.max(dayLimit, openDay ? days.findIndex((d) => d[0] === openDay) + 1 : 0))) {
       const feet = list.filter((w) => !isCar(w)), cars = list.filter(isCar);
       const dist = feet.reduce((s, w) => s + w.dist, 0), dur = feet.reduce((s, w) => s + w.dur, 0);
       const carKm = cars.reduce((s, w) => s + w.dist, 0);
@@ -1006,17 +1107,31 @@
       }
       box.appendChild(el);
     }
+    if (days.length > dayLimit) {
+      const more = document.createElement('button');
+      more.className = 'btn ghost small'; more.style.width = '100%';
+      more.textContent = `Daha fazla göster (${days.length - dayLimit} gün daha)`;
+      more.onclick = () => { dayLimit += 30; renderDaily(); };
+      box.appendChild(more);
+    }
   }
 
   function drawDay() {
     dayLayer.clearLayers();
-    const list = (openDay ? walks.filter((w) => dayKey(w.start) === openDay) : walks).filter((w) => showCar || !isCar(w));
+    let list;
+    if (openDay) list = walks.filter((w) => dayKey(w.start) === openDay);
+    else {
+      // Genel görünüm: sadece listede görünen günler
+      const keys = new Set(groupDays().slice(0, dayLimit).map((d) => d[0]));
+      list = walks.filter((w) => keys.has(dayKey(w.start)));
+    }
+    list = list.filter((w) => showCar || !isCar(w));
     for (const w of list) {
-      L.polyline(w.segs, { ...routeStyle(w, !!openDay), interactive: true })
+      L.polyline(openDay ? w.segs : coarse(w), { ...routeStyle(w, !!openDay), interactive: true })
         .on('click', () => (openDay ? openDetail(w.id) : selectDay(dayKey(w.start))))
         .addTo(dayLayer);
     }
-    const pts = list.flatMap((w) => w.segs.flat());
+    const pts = list.flatMap((w) => coarse(w).flat());
     if (pts.length) map.fitBounds(L.latLngBounds(pts), panelPad());
   }
 
@@ -1493,6 +1608,7 @@
 
   async function sync() {
     if (!sb || !user) return;
+    await ready;
     if (!navigator.onLine) { setSync('Çevrimdışı · bağlantı gelince eşitlenecek'); return; }
     if (syncing) { syncAgain = true; return; }
     syncing = true;
@@ -1823,9 +1939,19 @@
   });
 
   // ---------- Açılış ----------
-  buildIndex();
   renderLegend();
   renderAccount();
+  map.addLayer(fog);
+  applyMode();
+  startWatch();
+  renderButtons(); renderStats();
+  ready.then(() => {
+    buildIndex();
+    renderGoal();
+    if (tab === 'daily') { if (dailyView === 'list') renderList(); else renderDaily(); }
+    fillPlaces();
+    liveRebuild(); drawLive(); renderStats();
+  });
   if (cur) {
     if (cur.resumedAt) {
       // Sayfa kapanmıştı: kapalı kalan süreyi sayma, yeni parça başlat
@@ -1837,11 +1963,6 @@
     }
     liveRebuild(); drawLive();
   }
-  map.addLayer(fog);
-  applyMode();
-  startWatch();
-  renderButtons(); renderStats();
-  fillPlaces();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
